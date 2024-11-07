@@ -3,25 +3,7 @@ import numpy as np
 from pathlib import Path
 import matplotlib.pyplot as plt
 from matplotlib.animation import FuncAnimation
-
-
-class Particle:
-    def __init__(self, m, x, y, z, dt, T_C):
-        self.m = m
-        self.T_K = T_C + 273.15
-        self.position = np.array([x, y, z], dtype=np.float64)
-        self.velocity = self.initVelBoltzmann()
-        self.acceleration = np.zeros(3, dtype=np.float64)
-        self.position_old = self.position - self.velocity * dt
-        
-    def getPos(self):
-        return self.position
-
-    def initVelBoltzmann(self):
-        k_B = 1.38e-23
-        sigma = np.sqrt(k_B * self.T_K / self.m)
-        vel = np.random.normal(0, sigma, (3,)).astype(np.float64)
-        return vel
+import networkx as nx
 
 def load_state(file):
     with open(file, 'rb') as f:
@@ -40,9 +22,10 @@ def plot(state_trajectory, plot_outer_layer=True, loop=False):
 
     scatter = ax.scatter([], [], [], s=20, label='Particles')
     edge_lines = []
-    max_edges = max(len(state['topological_state'].edges()) for state in state_trajectory)
+    max_edges = max(len(state['topology'].edges()) for state in state_trajectory)
 
-    for _ in range(max_edges):
+    # Create a pool of line objects for edges
+    for _ in range(max_edges * (1 if plot_outer_layer else 3)):
         line, = ax.plot([], [], [], color='black')
         edge_lines.append(line)
 
@@ -60,44 +43,84 @@ def plot(state_trajectory, plot_outer_layer=True, loop=False):
     def jump_frame(event):
         if event.key == 'left':
             current_frame[0] = max(0, current_frame[0] - 1)  # Go one frame back, no negative index
+            update(current_frame[0])  # Manually update the animation to the new frame
         elif event.key == 'right':
             current_frame[0] = min(len(state_trajectory) - 1, current_frame[0] + 1)  # Go one frame forward
-        update(current_frame[0])  # Manually update the animation to the new frame
+            update(current_frame[0])  # Manually update the animation to the new frame
 
     def update(frame):
         current_frame[0] = frame  # Update current frame tracker
-        physical_state = state_trajectory[frame]['physical_state']
-        topological_state = state_trajectory[frame]['topological_state']
+        positions = state_trajectory[frame]['positions']  # positions is a NumPy array of shape (N_nodes, 3, 3)
+        topology = state_trajectory[frame]['topology']  # topology is a NetworkX graph
         
-        xs, ys, zs, colors = [], [], [], []
-        for node_id, layers in physical_state.items():
-            layer_indices = [0] if plot_outer_layer else [0, 1, 2]
-            for layer_index in layer_indices:
-                particle = layers[layer_index]
-                pos = particle.getPos()
-                xs.append(pos[0])
-                ys.append(pos[1])
-                zs.append(pos[2])
-                degree = topological_state.degree(node_id)
-                colors.append('red' if degree == 5 else 'blue' if degree == 6 else 'gray')
+        N_nodes = positions.shape[0]
+        if plot_outer_layer:
+            # Use the top layer positions
+            vectors = positions[:, 0, :]  # Shape: (N_nodes, 3)
+        else:
+            # Use all layers
+            vectors = positions.reshape(-1, 3)  # Shape: (N_nodes * 3, 3)
+        
+        xs = vectors[:, 0]
+        ys = vectors[:, 1]
+        zs = vectors[:, 2]
+
+        # Colors based on node degree
+        node_degrees = dict(topology.degree())
+        colors = []
+        if plot_outer_layer:
+            for node_id in range(N_nodes):
+                degree = node_degrees.get(node_id, 0)
+                if degree == 5:
+                    colors.append('red')
+                elif degree == 6:
+                    colors.append('blue')
+                else:
+                    colors.append('gray')
+        else:
+            for node_id in range(N_nodes):
+                degree = node_degrees.get(node_id, 0)
+                for _ in range(3):  # Repeat color for each layer
+                    if degree == 5:
+                        colors.append('red')
+                    elif degree == 6:
+                        colors.append('blue')
+                    else:
+                        colors.append('gray')
 
         scatter._offsets3d = (xs, ys, zs)
         scatter.set_color(colors)
 
-        current_edges = list(topological_state.edges())
+        # Clear previous edges
         for line in edge_lines:
             line.set_data([], [])
             line.set_3d_properties([])
 
-        for i, edge in enumerate(current_edges):
-            plot_layers = 3 if not plot_outer_layer else 1
-            for j in range(plot_layers):
-                pos1 = physical_state[edge[0]][j].getPos()
-                pos2 = physical_state[edge[1]][j].getPos()
-                edge_lines[i].set_data([pos1[0], pos2[0]], [pos1[1], pos2[1]])
-                edge_lines[i].set_3d_properties([pos1[2], pos2[2]])
-                edge_lines[i].set_color('black')
+        # Update edges
+        current_edges = list(topology.edges())
+        edge_count = 0
+        for edge in current_edges:
+            node1 = edge[0]
+            node2 = edge[1]
+            if plot_outer_layer:
+                layers = [0]
+            else:
+                layers = [0, 1, 2]
+            for layer in layers:
+                pos1 = positions[node1, layer, :]
+                pos2 = positions[node2, layer, :]
+                line = edge_lines[edge_count]
+                line.set_data([pos1[0], pos2[0]], [pos1[1], pos2[1]])
+                line.set_3d_properties([pos1[2], pos2[2]])
+                edge_count += 1
 
+        # Hide unused edge lines
+        for i in range(edge_count, len(edge_lines)):
+            line = edge_lines[i]
+            line.set_data([], [])
+            line.set_3d_properties([])
+
+        # Adjust plot limits
         margin = 0
         x_min, x_max = min(xs) - margin, max(xs) + margin
         y_min, y_max = min(ys) - margin, max(ys) + margin
@@ -115,7 +138,7 @@ def plot(state_trajectory, plot_outer_layer=True, loop=False):
         return scatter, *edge_lines
 
     frames = len(state_trajectory)
-    animation = FuncAnimation(fig, update, frames=frames, interval=10, blit=False, repeat=loop)
+    animation = FuncAnimation(fig, update, frames=frames, interval=100, blit=False, repeat=loop)
     
     fig.canvas.mpl_connect('key_press_event', toggle_animation)  # Space bar for pausing/resuming
     fig.canvas.mpl_connect('key_press_event', jump_frame)  # Left/Right arrow keys for frame control
@@ -124,7 +147,7 @@ def plot(state_trajectory, plot_outer_layer=True, loop=False):
     return animation
 
 # Load and animate the trajectory
-filename = 'sim_2.pkl'
+filename = '20241007_langevin_test1.pkl'
 cd = Path().resolve()
 filepath = cd / filename
 

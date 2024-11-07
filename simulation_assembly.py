@@ -6,6 +6,7 @@ import pickle
 import copy
 from pathlib import Path
 import cProfile
+from datetime import datetime
 
 import matplotlib.pyplot as plt
 
@@ -15,16 +16,23 @@ from graphblas.semiring import plus_pair
 from scipy.spatial import KDTree
 
 class MolecularDynamicsSimulation:
-    def __init__(self, file, dt, mass, lengthEq, delta, k1, T_C=20, origin=np.zeros(3), plot_outer_layer=False):
-        self.filename = file
+    def __init__(self, dt, mass, lengthEq, delta, km, T_C=20, origin=np.zeros(3), plot_outer_layer=False, method='verlet', damping_coeff = 100):
+        str_datetime = datetime.now().strftime("%Y%m%d%H%M%S")
+        filename = str_datetime + '_sim_' + method + "_dt" + str(dt) + "_delta" + str(delta) + "_km" + str(km)
+        if method=='langevin':
+            filename += "_damping" + str(damping_coeff)
+        filename += '.pkl'
+        self.filename = filename
+        
+        
         self.state_trajectory = []
         
         self.dt = np.float64(dt)
         self.mass = np.float64(mass)
         
-        self.k1 = np.float64(k1)
-        self.k2 = np.float64(k1/2)
-        self.k3 = np.float64(k1/3)
+        self.k1 = np.float64(km)
+        self.k2 = np.float64(km/2)
+        self.k3 = np.float64(km/3)
 
         self.lengthEq = np.float64(lengthEq)
         self.delta = np.float64(delta)
@@ -35,6 +43,9 @@ class MolecularDynamicsSimulation:
         self.origin = origin
 
         self.plot_outer_layer = plot_outer_layer
+        
+        self.method = method
+        self.damping_coeff = damping_coeff
 
         self.topology = nx.Graph()
         
@@ -484,7 +495,7 @@ class MolecularDynamicsSimulation:
         
         else:
             # No pentamer or hexamer closure: get random edge and attach particle
-            print("ADD NEW PARTICLE")
+            print(f"ADD NEW PARTICLE (TOTAL_NUM_PARTICLES={self.getParticleCount()[0]})")
             
             node_id = max(self.node_ids) + 1  # Generate new node ID
 
@@ -642,8 +653,26 @@ class MolecularDynamicsSimulation:
         # Update positions
         self.positions[:] = positions_new
 
+    def langevin_update(self):
+        # Recalculate forces and update accelerations
+        self.update_accelerations()
+        
+        # Update positions using Langevin algorithm
+        positions_new = self.positions + (self.accelerations * self.mass * self.dt)/self.damping_coeff
+
+        # Update old positions
+        self.positions_old[:] = self.positions.copy()
+
+        # Update positions
+        self.positions[:] = positions_new
+
     def simulate_step(self):
-        self.verlet_update()
+        if self.method == 'verlet':
+            self.verlet_update()
+        elif self.method == 'langevin':
+            self.langevin_update()
+        else:
+            raise Exception("No valid method chosen")
 
 # Main simulation loop
 def run_simulation(sim, n_steps, add_unit_every, save_every, plot_every):
@@ -682,23 +711,29 @@ def run_simulation(sim, n_steps, add_unit_every, save_every, plot_every):
     #plt.ioff()
     #plt.show()
 
+
+
 # Simulation parameters
-DT = 0.0001
+# FIXED PARAMETERS
 MASS = 1
 A0 = 1
-DELTA = 0.2
-K1 = 10
 T_C = 20
 PLOT_OUTER_LAYER = True
 
-FILENAME = 'sim_test.pkl'
+# DYNAMIC PARAMETERS
+DT = 0.01
+DELTA = 0.076
+KM = 1
 
-sim = MolecularDynamicsSimulation(file=FILENAME, dt=DT, mass=MASS, lengthEq=A0, delta=DELTA, k1=K1, T_C=T_C, plot_outer_layer=PLOT_OUTER_LAYER)
+METHOD = 'langevin'
+DAMPING_COEFFICIENT = 10
+
+sim = MolecularDynamicsSimulation(dt=DT, mass=MASS, lengthEq=A0, delta=DELTA, km=KM, T_C=T_C, plot_outer_layer=PLOT_OUTER_LAYER, method=METHOD, damping_coeff=DAMPING_COEFFICIENT)
 
 n_steps = 1000000
-add_unit_every = 1000
-save_every = 1000
-plot_every = 1000
+add_unit_every = 100
+save_every = 250
+plot_every = 100
 
 try:
     profiler = cProfile.Profile()
