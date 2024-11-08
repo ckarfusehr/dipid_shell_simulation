@@ -177,11 +177,8 @@ class MolecularDynamicsSimulation:
         return v_f
 
     # Getters
-    def getParticleIdLists(self):
-        return (self.node_ids, list(self.topology.nodes()))
-
     def getParticleCount(self):
-        return (self.N_nodes, self.topology.number_of_nodes())
+        return self.topology.number_of_nodes()
 
     # Plotting functions
     def initialize_plot(self):
@@ -291,7 +288,7 @@ class MolecularDynamicsSimulation:
 
     # Check if there is still a boundary in the assembly -> if not, the surface must be closed
     def is_closed_surface(self):
-        return len(self.boundary_edges) <= 3
+        return len(self.boundary_edges) <= 3 and self.getParticleCount() > 3
 
     def update_accelerations(self):
         # Reset accelerations
@@ -524,7 +521,7 @@ class MolecularDynamicsSimulation:
                 self.boundary_edges.add(new_edge)
         else:
             # No pentamer or hexamer closure: add new particle
-            print(f"ADD NEW PARTICLE (TOTAL_NUM_PARTICLES={self.getParticleCount()[0]})")
+            print(f"ADD NEW PARTICLE (TOTAL_NUM_PARTICLES={self.getParticleCount()})")
 
             node_id = max(self.node_ids) + 1  # Generate new node ID
 
@@ -634,6 +631,24 @@ class MolecularDynamicsSimulation:
                                 self.node_id_map[node_id] = idx - 1
                         return
 
+    def fix_cycles(self):
+        if self.getParticleCount() == 3:
+            return
+        
+        G = nx.Graph()
+        G.add_edges_from(self.boundary_edges)
+        cycles = nx.cycle_basis(G)
+        
+        # Filter for triangular cycles (cycles with exactly 3 nodes)
+        triangular_cycles = [cycle for cycle in cycles if len(cycle) == 3]
+
+        # Convert each triangular cycle into edges and remove from original edges
+        for cycle in triangular_cycles:
+            # Convert the cycle nodes to edges
+            cycle_edges = {tuple(sorted((cycle[i], cycle[(i+1) % 3]))) for i in range(3)}
+            # Remove these edges from the original set
+            self.boundary_edges -= cycle_edges
+        
     def init_vel_boltzmann(self, num_particles):
         k_B = 1.38e-23
         sigma = np.sqrt(k_B * self.T_K / self.mass)
@@ -747,7 +762,7 @@ def run_simulation(sim, n_steps, add_unit_every, save_every, plot_every):
             print(f'Statistics:')
             print(f'{step} steps were simulated in {int(hours)} hours {int(minutes)} minutes {int(seconds)} seconds.')
 
-            num_particles, _ = sim.getParticleCount()
+            num_particles = sim.getParticleCount()
             print(f'{num_particles} nodes were added.')
             break
 
@@ -762,6 +777,8 @@ def run_simulation(sim, n_steps, add_unit_every, save_every, plot_every):
         sim.simulate_step()
         # Check if two nodes are close enough for merging event of far apart surfaces
         sim.fix_topology(min_topo_dist=5, max_physical_dist=1, check_interval=50, current_step=step)
+        if (step%250):
+            sim.fix_cycles()
 
     # Keep the plot open after simulation ends
     plt.ioff()
