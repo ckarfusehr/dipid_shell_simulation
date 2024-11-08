@@ -13,6 +13,7 @@ def load_state(file):
 def plot(state_trajectory, plot_outer_layer=True, loop=False):
     fig = plt.figure()
     ax = fig.add_subplot(111, projection='3d')
+    ax.set_box_aspect([1, 1, 1])
 
     # Set labels and title
     ax.set_xlabel('X')
@@ -52,7 +53,11 @@ def plot(state_trajectory, plot_outer_layer=True, loop=False):
         current_frame[0] = frame  # Update current frame tracker
         positions = state_trajectory[frame]['positions']  # positions is a NumPy array of shape (N_nodes, 3, 3)
         topology = state_trajectory[frame]['topology']  # topology is a NetworkX graph
-        
+
+        # Reconstruct the node_id_map
+        node_ids = sorted(topology.nodes())
+        node_id_map = {node_id: idx for idx, node_id in enumerate(node_ids)}
+
         N_nodes = positions.shape[0]
         if plot_outer_layer:
             # Use the top layer positions
@@ -60,7 +65,7 @@ def plot(state_trajectory, plot_outer_layer=True, loop=False):
         else:
             # Use all layers
             vectors = positions.reshape(-1, 3)  # Shape: (N_nodes * 3, 3)
-        
+
         xs = vectors[:, 0]
         ys = vectors[:, 1]
         zs = vectors[:, 2]
@@ -69,7 +74,7 @@ def plot(state_trajectory, plot_outer_layer=True, loop=False):
         node_degrees = dict(topology.degree())
         colors = []
         if plot_outer_layer:
-            for node_id in range(N_nodes):
+            for idx, node_id in enumerate(node_ids):
                 degree = node_degrees.get(node_id, 0)
                 if degree == 5:
                     colors.append('red')
@@ -78,7 +83,7 @@ def plot(state_trajectory, plot_outer_layer=True, loop=False):
                 else:
                     colors.append('gray')
         else:
-            for node_id in range(N_nodes):
+            for idx, node_id in enumerate(node_ids):
                 degree = node_degrees.get(node_id, 0)
                 for _ in range(3):  # Repeat color for each layer
                     if degree == 5:
@@ -102,13 +107,15 @@ def plot(state_trajectory, plot_outer_layer=True, loop=False):
         for edge in current_edges:
             node1 = edge[0]
             node2 = edge[1]
+            idx1 = node_id_map[node1]
+            idx2 = node_id_map[node2]
             if plot_outer_layer:
                 layers = [0]
             else:
                 layers = [0, 1, 2]
             for layer in layers:
-                pos1 = positions[node1, layer, :]
-                pos2 = positions[node2, layer, :]
+                pos1 = positions[idx1, layer, :]
+                pos2 = positions[idx2, layer, :]
                 line = edge_lines[edge_count]
                 line.set_data([pos1[0], pos2[0]], [pos1[1], pos2[1]])
                 line.set_3d_properties([pos1[2], pos2[2]])
@@ -138,7 +145,7 @@ def plot(state_trajectory, plot_outer_layer=True, loop=False):
         return scatter, *edge_lines
 
     frames = len(state_trajectory)
-    animation = FuncAnimation(fig, update, frames=frames, interval=100, blit=False, repeat=loop)
+    animation = FuncAnimation(fig, update, frames=frames, interval=20, blit=False, repeat=loop)
     
     fig.canvas.mpl_connect('key_press_event', toggle_animation)  # Space bar for pausing/resuming
     fig.canvas.mpl_connect('key_press_event', jump_frame)  # Left/Right arrow keys for frame control
@@ -147,9 +154,20 @@ def plot(state_trajectory, plot_outer_layer=True, loop=False):
     return animation
 
 # Load and animate the trajectory
-filename = '20241007_langevin_test1.pkl'
+filename = '20241108145546_sim_langevin_dt0.01_delta0.2_km1_damping1.pkl'
 cd = Path().resolve()
 filepath = cd / filename
 
 state_trajectory = load_state(filepath)
-anim = plot(state_trajectory, plot_outer_layer=True, loop=False)
+anim = plot(state_trajectory[-1:], plot_outer_layer=True, loop=False)
+
+topology = state_trajectory[-1]['topology']
+
+degree_array = np.zeros(8)
+
+for node in topology.nodes():
+    degree_array[topology.degree(node)] += 1
+        
+        
+for i in range(len(degree_array)):
+    print(f'DEGREE {i}: {degree_array[i]} NODES')
