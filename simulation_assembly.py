@@ -8,6 +8,7 @@ from pathlib import Path
 import cProfile
 from datetime import datetime
 import random
+import argparse
 
 import matplotlib.pyplot as plt
 
@@ -622,7 +623,14 @@ class MolecularDynamicsSimulation:
 
     # Load and save
     def save_state(self):
+        # Create simulation-specific directory if it doesn't exist
         cd = Path(__file__).parent.resolve()
+        sim_output_dir = cd / 'sim_output'
+        sim_output_dir.mkdir(parents=True, exist_ok=True)  # Create 'sim_output' directory if it doesn't exist
+
+        sim_dir = sim_output_dir / self.filename  # Use self.filename as the simulation directory name
+        sim_dir.mkdir(parents=True, exist_ok=True)  # Create simulation-specific directory
+
 
         # Prepare the new state
         state = {
@@ -640,8 +648,8 @@ class MolecularDynamicsSimulation:
         self.state_trajectory.append(state)
 
         # Only pickle self
-        with open(cd / self.filename, 'wb') as f:
-            pickle.dump(self, f)
+        with open(sim_dir / self.filename, 'wb') as f:
+            pickle.dump(state, f)
 
     @classmethod
     def load_state(cls, filename, filename_append, start_at=-1):
@@ -875,6 +883,16 @@ def run_simulation(sim, visualizer, n_steps, add_unit_every, save_every, plot_ev
     plt.ioff()
     plt.show()
 
+
+# Set up argument parser
+parser = argparse.ArgumentParser(description='Molecular Dynamics Simulation')
+parser.add_argument('--delta', type=float, default=0.2, help='Value of DELTA')
+parser.add_argument('--n_steps', type=int, default=10000000, help='Number of simulation steps')
+parser.add_argument('--add_unit_every', type=int, default=500, help='Frequency to add unit')
+parser.add_argument('--save_every', type=int, default=2500, help='Frequency to save simulation')
+parser.add_argument('--plot_every', type=int, default=5000, help='Frequency to plot simulation')
+args = parser.parse_args()
+
 # Simulation parameters
 # FIXED PARAMETERS
 MASS = 1
@@ -887,8 +905,7 @@ DAMPING_COEFFICIENT = 0.1
 KM = 0.1
 
 # DYNAMIC PARAMETERS
-DELTA = 0.15
-
+DELTA = args.delta
 
 sim = MolecularDynamicsSimulation(
     dt=DT,
@@ -903,15 +920,13 @@ sim = MolecularDynamicsSimulation(
 
 visualizer = SimulationVisualizer(sim, plot_outer_layer=PLOT_OUTER_LAYER)
 
-n_steps = 10000000
-add_unit_every = 500
-save_every = 250
-plot_every = 250
-
+n_steps = args.n_steps
+add_unit_every = args.add_unit_every
+save_every = args.save_every
+plot_every = args.plot_every
 
 try:
     run_simulation(sim, visualizer, n_steps, add_unit_every, save_every, plot_every)
-
 except Exception as e:
     print(f"An error occurred: {e}")
     traceback.print_exc()
