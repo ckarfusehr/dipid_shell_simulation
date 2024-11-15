@@ -7,6 +7,7 @@ import copy
 from pathlib import Path
 import cProfile
 from datetime import datetime
+import random
 
 import matplotlib.pyplot as plt
 
@@ -15,16 +16,19 @@ import graphblas as gb
 from graphblas.semiring import plus_pair
 from scipy.spatial import KDTree
 
+np.seterr(divide='raise', over='raise', under='raise', invalid='raise')
+
 class MolecularDynamicsSimulation:
-    def __init__(self, dt, mass, lengthEq, delta, km, T_C=20, origin=np.zeros(3), plot_outer_layer=False, method='verlet', damping_coeff=100):
+    def __init__(self, dt, mass, lengthEq, delta, km, T_C=20, origin=np.zeros(3), method='verlet', damping_coeff=1):
         str_datetime = datetime.now().strftime("%Y%m%d%H%M%S")
-        filename = str_datetime + '_sim_' + method + "_dt" + str(dt) + "_delta" + str(delta) + "_km" + str(km)
+        filename = str_datetime + '_sim_' + method + "_dt" + str(dt) + "_delta" + str(delta) + "_km" + str(km)+'_TC' + str(T_C)
         if method == 'langevin':
             filename += "_damping" + str(damping_coeff)
         filename += '.pkl'
         self.filename = filename
 
         self.state_trajectory = []
+        self.sim_trajectory = []
 
         self.dt = np.float64(dt)
         self.mass = np.float64(mass)
@@ -40,8 +44,6 @@ class MolecularDynamicsSimulation:
         self.T_K = T_C + 273.15
 
         self.origin = origin
-
-        self.plot_outer_layer = plot_outer_layer
 
         self.method = method
         self.damping_coeff = damping_coeff
@@ -84,8 +86,6 @@ class MolecularDynamicsSimulation:
         self.boundary_edges = set()
         for edge in self.topology.edges():
             self.boundary_edges.add(tuple(sorted(edge)))
-            
-        print(f'Initial boundary: {self.boundary_edges}')
 
     # Helper functions
     def create_monomer(self):
@@ -179,112 +179,6 @@ class MolecularDynamicsSimulation:
     # Getters
     def getParticleCount(self):
         return self.topology.number_of_nodes()
-
-    # Plotting functions
-    def initialize_plot(self):
-        plt.ion()  # Enable interactive mode
-        self.fig = plt.figure()
-        self.ax = self.fig.add_subplot(111, projection='3d')
-        self.ax.set_box_aspect([1, 1, 1])
-
-        # Initial particle positions
-        if self.plot_outer_layer:
-            vectors = self.positions[:, 0, :]
-        else:
-            vectors = self.positions.reshape(-1, 3)
-        self.xs = vectors[:, 0]
-        self.ys = vectors[:, 1]
-        self.zs = vectors[:, 2]
-
-        # Scatter plot for particles
-        self.scatter = self.ax.scatter(self.xs, self.ys, self.zs, color='blue', s=20, label='Particles')
-
-        # Store references to the edge lines
-        self.edge_lines = []
-
-        for edge in self.topology.edges():
-            plot_layers = 1 if self.plot_outer_layer else 3
-
-            for j in range(plot_layers):
-                pos1 = self.positions[self.node_id_map[edge[0]], j, :]
-                pos2 = self.positions[self.node_id_map[edge[1]], j, :]
-
-                edge_tuple = tuple(sorted(edge))
-                color = 'red' if edge_tuple in self.boundary_edges else 'black'
-
-                line, = self.ax.plot([pos1[0], pos2[0]], [pos1[1], pos2[1]], [pos1[2], pos2[2]], color=color)
-                self.edge_lines.append(line)
-
-        # Set labels and title
-        self.ax.set_xlabel('X')
-        self.ax.set_ylabel('Y')
-        self.ax.set_zlabel('Z')
-        self.ax.set_title('Capsid Assembly Simulation')
-
-    def update_plot(self):
-        # Update particle positions
-        if self.plot_outer_layer:
-            vectors = self.positions[:, 0, :]
-        else:
-            vectors = self.positions.reshape(-1, 3)
-        self.xs = vectors[:, 0]
-        self.ys = vectors[:, 1]
-        self.zs = vectors[:, 2]
-
-        # Update the scatter plot for particles
-        self.scatter._offsets3d = (self.xs, self.ys, self.zs)
-
-        # Remove old edge lines
-        while self.edge_lines:
-            line = self.edge_lines.pop()
-            line.remove()
-
-        for edge in self.topology.edges():
-            plot_layers = 1 if self.plot_outer_layer else 3
-
-            for j in range(plot_layers):
-                pos1 = self.positions[self.node_id_map[edge[0]], j, :]
-                pos2 = self.positions[self.node_id_map[edge[1]], j, :]
-
-                edge_tuple = tuple(sorted(edge))
-                color = 'red' if edge_tuple in self.boundary_edges else 'black'
-
-                # Draw the new edge and store the line reference
-                line, = self.ax.plot([pos1[0], pos2[0]], [pos1[1], pos2[1]], [pos1[2], pos2[2]], color=color)
-                self.edge_lines.append(line)
-
-        # Dynamically adjust the axis limits based on particle positions
-        margin = 0  # Extra margin to ensure the particles are fully visible
-        x_min, x_max = min(self.xs) - margin, max(self.xs) + margin
-        y_min, y_max = min(self.ys) - margin, max(self.ys) + margin
-        z_min, z_max = min(self.zs) - margin, max(self.zs) + margin
-
-        # Ensure the x, y, and z axes have the same range (same extensions)
-        x_range = x_max - x_min
-        y_range = y_max - y_min
-        z_range = z_max - z_min
-        max_range = max(x_range, y_range, z_range)
-
-        # Center the axes by adjusting the minimum and maximum to keep them equal in range
-        x_center = (x_min + x_max) / 2
-        y_center = (y_min + y_max) / 2
-        z_center = (z_min + z_max) / 2
-
-        x_min_new = x_center - max_range / 2
-        x_max_new = x_center + max_range / 2
-        y_min_new = y_center - max_range / 2
-        y_max_new = y_center + max_range / 2
-        z_min_new = z_center - max_range / 2
-        z_max_new = z_center + max_range / 2
-
-        # Set the new limits with consistent x, y, and z ranges
-        self.ax.set_xlim(x_min_new, x_max_new)
-        self.ax.set_ylim(y_min_new, y_max_new)
-        self.ax.set_zlim(z_min_new, z_max_new)
-
-        # Redraw the plot to show updates
-        self.fig.canvas.draw()
-        plt.pause(0.1)
 
     # Check if there is still a boundary in the assembly -> if not, the surface must be closed
     def is_closed_surface(self):
@@ -424,6 +318,58 @@ class MolecularDynamicsSimulation:
 
         return totalEnergy
 
+    def close_pentamer(self, node_id, neighbour_1, neighbour_2):
+        print("CLOSE AS PENTAMER")
+
+        # Remove the two edges connected to neighbour_2 from boundary_edges
+        edge1 = tuple(sorted((node_id, neighbour_1)))
+        edge2 = tuple(sorted((node_id, neighbour_2)))
+        self.boundary_edges.discard(edge1)
+        self.boundary_edges.discard(edge2)
+
+        # Remove boundary edges involving neighbour_2
+        edges_to_remove = {edge for edge in self.boundary_edges if neighbour_2 in edge}
+        self.boundary_edges -= edges_to_remove
+
+        new_boundaries = {tuple(sorted((node, neighbour_1))) for edge in edges_to_remove for node in edge if node != neighbour_2}
+        self.boundary_edges.update(new_boundaries)
+
+        # Add new edges and update boundary_edges
+        for neighbour_id in list(self.topology.neighbors(neighbour_2)):
+            self.topology.add_edge(neighbour_1, neighbour_id)
+                
+        # Remove node and update data structures
+        self.topology.remove_node(neighbour_2)
+        idx_remove = self.node_id_map.pop(neighbour_2)
+        self.node_ids.remove(neighbour_2)
+        self.N_nodes -= 1
+        self.positions = np.delete(self.positions, idx_remove, axis=0)
+        self.velocities = np.delete(self.velocities, idx_remove, axis=0)
+        self.accelerations = np.delete(self.accelerations, idx_remove, axis=0)
+        self.positions_old = np.delete(self.positions_old, idx_remove, axis=0)
+
+        # Update node_id_map indices
+        for node_id, idx in self.node_id_map.items():
+            if idx > idx_remove:
+                self.node_id_map[node_id] = idx - 1
+
+    def close_hexamer(self, min_entry):
+        print("CLOSE AS HEXAMER")
+        
+        # Close as Hexamer
+        edge1 = tuple(sorted((min_entry['node_id'], min_entry['neighbour_1'])))
+        edge2 = tuple(sorted((min_entry['node_id'], min_entry['neighbour_2'])))
+        self.boundary_edges.discard(edge1)
+        self.boundary_edges.discard(edge2)
+
+        # Add new edge and update boundary_edges
+        self.topology.add_edge(min_entry['neighbour_1'], min_entry['neighbour_2'])
+        new_edge = tuple(sorted((min_entry['neighbour_1'], min_entry['neighbour_2'])))
+        if new_edge in self.boundary_edges:
+            self.boundary_edges.discard(new_edge)
+        else:
+            self.boundary_edges.add(new_edge)
+
     def add_particle(self, node_id, pos_layers):
         # Add a new particle with given positions for each layer
         self.topology.add_node(node_id)
@@ -437,7 +383,7 @@ class MolecularDynamicsSimulation:
         self.accelerations = np.vstack((self.accelerations, [np.zeros((3, 3), dtype=np.float64)]))
         self.positions_old = np.vstack((self.positions_old, [pos_layers - self.velocities[-1] * self.dt]))
 
-    def addParticle(self):
+    def next_position(self):
         # Use boundary edges to find nodes at the boundary
         boundary_nodes = set()
         for edge in self.boundary_edges:
@@ -457,8 +403,9 @@ class MolecularDynamicsSimulation:
                 continue  # Skip nodes that don't have at least two boundary connections
             angle = self.calc_angle(node, connected_ids[0], connected_ids[1])
             if degree == 2 or degree == 3:
-                angle = 360 - angle
+                angle = 360.00 - angle
 
+            angle = round(angle,2)
             entry = {'angle': angle, 'node_id': node, 'degree': degree,
                      'neighbour_1': connected_ids[0], 'neighbour_2': connected_ids[1]}
             angles.append(entry)
@@ -467,65 +414,34 @@ class MolecularDynamicsSimulation:
             print("No valid nodes to add particles.")
             return
 
-        min_entry = min(angles, key=lambda x: x['angle'])
+        #find next position by getting smalles closing angle (if ambiguous choose randomly)
+        min_angle = min(angles, key=lambda x: x['angle'])
+        min_entries = [x for x in angles if x['angle'] == min_angle['angle']]
+
+        min_entry = []
+        if min_entries and len(min_entries) > 1:
+            print('RANDOM')
+            min_entry = random.choice(min_entries)
+        else:
+            print('SINGLE')
+            min_entry = min_entries[0]
 
         if min_entry['angle'] < 30:
-            print("CLOSE AS PENTAMER")
-
-            # Remove the two edges connected to neighbour_2 from boundary_edges
-            edge1 = tuple(sorted((min_entry['node_id'], min_entry['neighbour_1'])))
-            edge2 = tuple(sorted((min_entry['node_id'], min_entry['neighbour_2'])))
-            self.boundary_edges.discard(edge1)
-            self.boundary_edges.discard(edge2)
-
-            # Remove boundary edges involving neighbour_2
-            edges_to_remove = {edge for edge in self.boundary_edges if min_entry['neighbour_2'] in edge}
-            self.boundary_edges -= edges_to_remove
-
-            new_boundaries = {tuple(sorted((node, min_entry['neighbour_1']))) for edge in edges_to_remove for node in edge if node != min_entry['neighbour_2']}
-            self.boundary_edges.update(new_boundaries)
-
-            # Add new edges and update boundary_edges
-            for neighbour_id in list(self.topology.neighbors(min_entry['neighbour_2'])):
-                self.topology.add_edge(min_entry['neighbour_1'], neighbour_id)
-                    
-            # Remove node and update data structures
-            self.topology.remove_node(min_entry['neighbour_2'])
-            idx_remove = self.node_id_map.pop(min_entry['neighbour_2'])
-            self.node_ids.remove(min_entry['neighbour_2'])
-            self.N_nodes -= 1
-            self.positions = np.delete(self.positions, idx_remove, axis=0)
-            self.velocities = np.delete(self.velocities, idx_remove, axis=0)
-            self.accelerations = np.delete(self.accelerations, idx_remove, axis=0)
-            self.positions_old = np.delete(self.positions_old, idx_remove, axis=0)
-
-            # Update node_id_map indices
-            for node_id, idx in self.node_id_map.items():
-                if idx > idx_remove:
-                    self.node_id_map[node_id] = idx - 1
+            self.close_pentamer(min_entry['node_id'], min_entry['neighbour_1'], min_entry['neighbour_2'])
 
         elif 30 <= min_entry['angle'] <= 60 and min_entry['degree'] == 6:
-            print("CLOSE AS HEXAMER")
-            # Close as Hexamer
-            edge1 = tuple(sorted((min_entry['node_id'], min_entry['neighbour_1'])))
-            edge2 = tuple(sorted((min_entry['node_id'], min_entry['neighbour_2'])))
-            self.boundary_edges.discard(edge1)
-            self.boundary_edges.discard(edge2)
-
-            # Add new edge and update boundary_edges
-            self.topology.add_edge(min_entry['neighbour_1'], min_entry['neighbour_2'])
-            new_edge = tuple(sorted((min_entry['neighbour_1'], min_entry['neighbour_2'])))
-            if new_edge in self.boundary_edges:
-                self.boundary_edges.discard(new_edge)
-            else:
-                self.boundary_edges.add(new_edge)
+            self.close_hexamer(min_entry)
+            
+        elif min_entry['degree'] == 7:
+             self.close_pentamer(min_entry['node_id'], min_entry['neighbour_1'], min_entry['neighbour_2'])
+            
         else:
             # No pentamer or hexamer closure: add new particle
             print(f"ADD NEW PARTICLE (TOTAL_NUM_PARTICLES={self.getParticleCount()})")
-
+            
             node_id = max(self.node_ids) + 1  # Generate new node ID
 
-            self.placeParticle(node_id, min_entry['node_id'], min_entry['neighbour_1'])
+            self.place_particle(node_id, min_entry['node_id'], min_entry['neighbour_1'])
 
             # Update boundary edges
             edge_to_remove = tuple(sorted((min_entry['node_id'], min_entry['neighbour_1'])))
@@ -537,7 +453,7 @@ class MolecularDynamicsSimulation:
             self.boundary_edges.add(new_edge1)
             self.boundary_edges.add(new_edge2)
 
-    def placeParticle(self, id, edgeStart, edgeEnd):
+    def place_particle(self, id, edgeStart, edgeEnd):
         anchor_nodes = list(nx.common_neighbors(self.topology, edgeStart, edgeEnd))
         if not anchor_nodes:
             print("No common neighbor found.")
@@ -568,68 +484,66 @@ class MolecularDynamicsSimulation:
         self.topology.add_edge(id, edgeEnd)
 
     def fix_topology(self, min_topo_dist=5, max_physical_dist=1.0, check_interval=50, current_step=0):
-        # Only check every X steps
+        # Perform check only at specified intervals
         if current_step % check_interval != 0:
             return
 
-        # Extract positions of nodes and create a KDTree for efficient spatial searching
-        indices = {idx: node_id for node_id, idx in self.node_id_map.items()}
-        positions = self.positions[:, 0, :]  # Use the top layer positions for proximity check
-
+        # Prepare positions and KDTree for spatial queries
+        positions = self.positions[:, 0, :]  # Top layer positions
         kd_tree = KDTree(positions)
+        idx_to_node_id = [None] * len(positions)
+        for node_id, idx in self.node_id_map.items():
+            idx_to_node_id[idx] = node_id
 
-        # For each node, find nearby nodes (within a given distance)
-        boundary_nodes = set()
-        for edge in self.boundary_edges:
-            boundary_nodes.update(edge)
+        # Identify valid boundary nodes
+        boundary_nodes = {node for edge in self.boundary_edges for node in edge if node in self.node_id_map}
 
-        # Remove any nodes that are no longer in the topology
-        boundary_nodes = {node for node in boundary_nodes if node in self.node_id_map}
-
-        for node in boundary_nodes.copy():
+        for node in boundary_nodes:
             node_idx = self.node_id_map[node]
-            node_pos = self.positions[node_idx, 0, :]
-            results = kd_tree.query_ball_point(node_pos, r=max_physical_dist)
+            node_pos = positions[node_idx]
 
-            node_ids = [indices[result] for result in results if indices[result] != node]
-            for other_node in node_ids:
-                # Check if other_node is still valid
-                if other_node not in self.node_id_map:
-                    continue
-                # Check topological distance
-                if nx.has_path(self.topology, node, other_node):
+            # Find the closest other node within max_physical_dist
+            distances, indices = kd_tree.query(node_pos, k=2)
+            dist, idx = distances[1], indices[1]  # Skip the node itself (distances[0])
+
+            if dist <= max_physical_dist:
+                other_node = idx_to_node_id[idx]
+                if other_node in self.node_id_map and nx.has_path(self.topology, node, other_node):
                     topo_dist = nx.shortest_path_length(self.topology, source=node, target=other_node)
-
                     if topo_dist >= min_topo_dist:
                         print('FIXING EVENT OCCURRED')
 
-                        # Merge nodes if criteria are met
-                        for neighbour_id in list(self.topology.neighbors(other_node)):
-                            self.topology.add_edge(node, neighbour_id)
-                            new_edge = tuple(sorted((node, neighbour_id)))
-                            if new_edge in self.boundary_edges:
-                                self.boundary_edges.discard(new_edge)
+                        # Merge neighbor relationships from other_node to node
+                        for neighbor in list(self.topology.neighbors(other_node)):
+                            self.topology.add_edge(node, neighbor)
+                            edge = tuple(sorted((node, neighbor)))
+                            if edge in self.boundary_edges:
+                                self.boundary_edges.discard(edge)
                             else:
-                                self.boundary_edges.add(new_edge)
-                        # Remove boundary edges involving other_node
-                        edges_to_remove = {edge for edge in self.boundary_edges if other_node in edge}
-                        self.boundary_edges -= edges_to_remove
+                                self.boundary_edges.add(edge)
 
+                        # Remove other_node from data structures
+                        self.boundary_edges = {edge for edge in self.boundary_edges if other_node not in edge}
                         self.topology.remove_node(other_node)
                         idx_remove = self.node_id_map.pop(other_node)
                         self.node_ids.remove(other_node)
                         self.N_nodes -= 1
-                        # Remove positions, velocities, etc., corresponding to the removed node
+
+                        # Update positions and related arrays
                         self.positions = np.delete(self.positions, idx_remove, axis=0)
                         self.velocities = np.delete(self.velocities, idx_remove, axis=0)
                         self.accelerations = np.delete(self.accelerations, idx_remove, axis=0)
                         self.positions_old = np.delete(self.positions_old, idx_remove, axis=0)
 
-                        # Update node_id_map indices
-                        for node_id, idx in self.node_id_map.items():
+                        # Update indices in node_id_map and idx_to_node_id
+                        for n_id, idx in self.node_id_map.items():
                             if idx > idx_remove:
-                                self.node_id_map[node_id] = idx - 1
-                        return
+                                self.node_id_map[n_id] = idx - 1
+                                idx_to_node_id[idx - 1] = n_id
+                            else:
+                                idx_to_node_id[idx] = n_id
+                        idx_to_node_id.pop()  # Remove last element after deletion
+                        return  # Exit after processing one node
 
     def fix_cycles(self):
         if self.getParticleCount() == 3:
@@ -646,8 +560,24 @@ class MolecularDynamicsSimulation:
         for cycle in triangular_cycles:
             # Convert the cycle nodes to edges
             cycle_edges = {tuple(sorted((cycle[i], cycle[(i+1) % 3]))) for i in range(3)}
-            # Remove these edges from the original set
+            unique_indices = set().union(*cycle_edges)
+            
+            '''
+            for index in unique_indices:
+                print(index)
+                if self.topology.degree(index) == 7:
+                    neighbours = unique_indices - {index}
+                    neighbour1, neighbour2 = neighbours
+                    self.close_pentamer(index, neighbour1, neighbour2)
+                     
+                    # Remove these edges from the original set
+                    self.boundary_edges -= cycle_edges
+                    
+                    return
+            '''
             self.boundary_edges -= cycle_edges
+            
+        return
         
     def init_vel_boltzmann(self, num_particles):
         k_B = 1.38e-23
@@ -692,22 +622,50 @@ class MolecularDynamicsSimulation:
 
     # Load and save
     def save_state(self):
-        # Save state
         cd = Path(__file__).parent.resolve()
 
-        # Make deep copies of the state to ensure they don't reference the same objects
-        physical_state_copy = copy.deepcopy(self.positions)
-        topological_state_copy = copy.deepcopy(self.topology)
-
-        state = {'positions': physical_state_copy, 'topology': topological_state_copy}
+        # Prepare the new state
+        state = {
+            'positions': copy.deepcopy(self.positions),
+            'topology': copy.deepcopy(self.topology),
+            'positions_old': copy.deepcopy(self.positions_old),
+            'velocities': copy.deepcopy(self.velocities),
+            'accelerations': copy.deepcopy(self.accelerations),
+            'boundaries': copy.deepcopy(self.boundary_edges),
+            'node_ids': copy.deepcopy(self.node_ids),
+            'node_id_map': copy.deepcopy(self.node_id_map),
+            'N_nodes': copy.deepcopy(self.N_nodes)
+            
+        }
         self.state_trajectory.append(state)
-        with open(cd / self.filename, 'wb') as f:
-            pickle.dump(self.state_trajectory, f)
 
-    def load_state(self):
-        # Load the entire trajectory of states
-        with open(self.filename, 'rb') as f:
-            self.state_trajectory = pickle.load(f)
+        # Only pickle self
+        with open(cd / self.filename, 'wb') as f:
+            pickle.dump(self, f)
+
+    @classmethod
+    def load_state(cls, filename, filename_append, start_at=-1):
+        with open(filename, 'rb') as f:
+            loaded_instance = pickle.load(f)
+
+        trajectory = copy.deepcopy(loaded_instance.state_trajectory[start_at])
+
+        # Update the filename
+        loaded_instance.filename = '.'.join(loaded_instance.filename.split('.')[:-1]) + '_' + filename_append + '.pkl'
+
+        # Update the state
+        loaded_instance.positions = trajectory['positions']
+        loaded_instance.positions = trajectory['positions']
+        loaded_instance.positions_old = trajectory['positions_old']
+        loaded_instance.velocities = trajectory['velocities']
+        loaded_instance.accelerations = trajectory['accelerations']
+        loaded_instance.topology = trajectory['topology']
+        loaded_instance.boundary_edges = trajectory['boundaries']
+        loaded_instance.node_ids = trajectory['node_ids']
+        loaded_instance.node_id_map = trajectory['node_id_map']
+        loaded_instance.N_nodes = trajectory['N_nodes']
+
+        return loaded_instance
 
     # Simulation
     def verlet_update(self):
@@ -745,15 +703,148 @@ class MolecularDynamicsSimulation:
         else:
             raise Exception("No valid method chosen")
 
+class SimulationVisualizer:
+    def __init__(self, sim, plot_outer_layer=False):
+        self.sim = sim
+        self.plot_outer_layer = plot_outer_layer
+        self.stop_simulation = False  # Flag to indicate if the simulation should stop
+
+        # Initialize the plot
+        self.initialize_plot()
+        
+    def initialize_plot(self):
+        plt.close('all')
+        
+        plt.ion()  # Enable interactive mode
+        self.fig = plt.figure()
+        self.ax = self.fig.add_subplot(111, projection='3d')
+        self.ax.set_box_aspect([1, 1, 1])
+
+        # Connect the close event handler
+        self.fig.canvas.mpl_connect('close_event', self.on_close)
+
+        # Initial particle positions
+        if self.plot_outer_layer:
+            vectors = self.sim.positions[:, 0, :]
+        else:
+            vectors = self.sim.positions.reshape(-1, 3)
+        self.xs = vectors[:, 0]
+        self.ys = vectors[:, 1]
+        self.zs = vectors[:, 2]
+
+        # Scatter plot for particles
+        self.scatter = self.ax.scatter(self.xs, self.ys, self.zs, color='blue', s=20, label='Particles')
+
+        # Store references to the edge lines
+        self.edge_lines = []
+
+        for edge in self.sim.topology.edges():
+            plot_layers = 1 if self.plot_outer_layer else 3
+
+            for j in range(plot_layers):
+                pos1 = self.sim.positions[self.sim.node_id_map[edge[0]], j, :]
+                pos2 = self.sim.positions[self.sim.node_id_map[edge[1]], j, :]
+
+                edge_tuple = tuple(sorted(edge))
+                color = 'red' if edge_tuple in self.sim.boundary_edges else 'black'
+
+                line, = self.ax.plot([pos1[0], pos2[0]], [pos1[1], pos2[1]], [pos1[2], pos2[2]], color=color)
+                self.edge_lines.append(line)
+
+        # Set labels and title
+        self.ax.set_xlabel('X')
+        self.ax.set_ylabel('Y')
+        self.ax.set_zlabel('Z')
+        self.ax.set_title('Capsid Assembly Simulation')
+
+    def on_close(self, event):
+        print('Figure closed')
+        # Set a flag to stop the simulation
+        self.stop_simulation = True
+
+    def update_plot(self):
+        # Update particle positions
+        if self.plot_outer_layer:
+            vectors = self.sim.positions[:, 0, :]
+        else:
+            vectors = self.sim.positions.reshape(-1, 3)
+        self.xs = vectors[:, 0]
+        self.ys = vectors[:, 1]
+        self.zs = vectors[:, 2]
+
+        # Update the scatter plot for particles
+        self.scatter._offsets3d = (self.xs, self.ys, self.zs)
+
+        # Remove old edge lines
+        while self.edge_lines:
+            line = self.edge_lines.pop()
+            line.remove()
+
+        for edge in self.sim.topology.edges():
+            plot_layers = 1 if self.plot_outer_layer else 3
+
+            for j in range(plot_layers):
+                pos1 = self.sim.positions[self.sim.node_id_map[edge[0]], j, :]
+                pos2 = self.sim.positions[self.sim.node_id_map[edge[1]], j, :]
+
+                edge_tuple = tuple(sorted(edge))
+                color = 'red' if edge_tuple in self.sim.boundary_edges else 'black'
+
+                # Draw the new edge and store the line reference
+                line, = self.ax.plot([pos1[0], pos2[0]], [pos1[1], pos2[1]], [pos1[2], pos2[2]], color=color)
+                self.edge_lines.append(line)
+
+        # Dynamically adjust the axis limits based on particle positions
+        margin = 0  # Extra margin to ensure the particles are fully visible
+        x_min, x_max = min(self.xs) - margin, max(self.xs) + margin
+        y_min, y_max = min(self.ys) - margin, max(self.ys) + margin
+        z_min, z_max = min(self.zs) - margin, max(self.zs) + margin
+
+        # Ensure the x, y, and z axes have the same range (same extensions)
+        x_range = x_max - x_min
+        y_range = y_max - y_min
+        z_range = z_max - z_min
+        max_range = max(x_range, y_range, z_range)
+
+        # Center the axes by adjusting the minimum and maximum to keep them equal in range
+        x_center = (x_min + x_max) / 2
+        y_center = (y_min + y_max) / 2
+        z_center = (z_min + z_max) / 2
+
+        x_min_new = x_center - max_range / 2
+        x_max_new = x_center + max_range / 2
+        y_min_new = y_center - max_range / 2
+        y_max_new = y_center + max_range / 2
+        z_min_new = z_center - max_range / 2
+        z_max_new = z_center + max_range / 2
+
+        # Set the new limits with consistent x, y, and z ranges
+        self.ax.set_xlim(x_min_new, x_max_new)
+        self.ax.set_ylim(y_min_new, y_max_new)
+        self.ax.set_zlim(z_min_new, z_max_new)
+
+        # Redraw the plot to show updates
+        self.fig.canvas.draw()
+        plt.pause(0.1)
+
 # Main simulation loop
-def run_simulation(sim, n_steps, add_unit_every, save_every, plot_every):
-    sim.initialize_plot()
+def run_simulation(sim, visualizer, n_steps, add_unit_every, save_every, plot_every):
     start_time = time.time()
     for step in range(n_steps):
+        if visualizer.stop_simulation:
+            print('Simulation stopped by user.')
+            sim.save_state()
+            break
+
         if step != 0 and step % save_every == 0:
             sim.save_state()
 
         if sim.is_closed_surface():
+            for i in range(200):
+                sim.simulate_step()
+                
+            sim.save_state()
+            
             total_time = time.time() - start_time
             hours, remainder = divmod(total_time, 3600)
             minutes, seconds = divmod(remainder, 60)
@@ -767,17 +858,17 @@ def run_simulation(sim, n_steps, add_unit_every, save_every, plot_every):
             break
 
         if step != 0 and step % add_unit_every == 0:
-            sim.addParticle()
+            sim.next_position()
 
         if step % plot_every == 0:
-            sim.update_plot()
+            visualizer.update_plot()
             #print(f'E_total = {sim.calcTotalEnergy()}')
 
         # Simulate one step
         sim.simulate_step()
         # Check if two nodes are close enough for merging event of far apart surfaces
-        sim.fix_topology(min_topo_dist=5, max_physical_dist=1, check_interval=50, current_step=step)
-        if (step%250):
+        sim.fix_topology(min_topo_dist=5, max_physical_dist=0.5, check_interval=50, current_step=step)
+        if (step % 250):
             sim.fix_cycles()
 
     # Keep the plot open after simulation ends
@@ -790,14 +881,14 @@ MASS = 1
 A0 = 1
 T_C = 20
 PLOT_OUTER_LAYER = True
+DT = 0.01
+METHOD = 'langevin'
+DAMPING_COEFFICIENT = 0.1
+KM = 0.1
 
 # DYNAMIC PARAMETERS
-DT = 0.01
 DELTA = 0.15
-KM = 1
 
-METHOD = 'langevin'
-DAMPING_COEFFICIENT = 1
 
 sim = MolecularDynamicsSimulation(
     dt=DT,
@@ -806,24 +897,34 @@ sim = MolecularDynamicsSimulation(
     delta=DELTA,
     km=KM,
     T_C=T_C,
-    plot_outer_layer=PLOT_OUTER_LAYER,
     method=METHOD,
     damping_coeff=DAMPING_COEFFICIENT
 )
 
-n_steps = 1000000
+visualizer = SimulationVisualizer(sim, plot_outer_layer=PLOT_OUTER_LAYER)
+
+n_steps = 10000000
 add_unit_every = 500
-save_every = 100
-plot_every = 100
+save_every = 250
+plot_every = 250
+
 
 try:
-    #profiler = cProfile.Profile()
-    #profiler.enable()
-    # cProfile.run('run_simulation(sim, n_steps, add_unit_every, save_every, plot_every)')
-    run_simulation(sim, n_steps, add_unit_every, save_every, plot_every)
-    #profiler.disable()
-    #profiler.dump_stats('profile_output.prof')
+    run_simulation(sim, visualizer, n_steps, add_unit_every, save_every, plot_every)
 
 except Exception as e:
     print(f"An error occurred: {e}")
     traceback.print_exc()
+
+
+# Load and continue simulation if needed
+'''
+try:
+    filename = './20241115133330_sim_langevin_dt0.01_delta0.1_km0.1_TC20_damping0.1_cont1.pkl'
+    newsim = MolecularDynamicsSimulation.load_state(filename, 'cont1', start_at=-30)
+    visualizer = SimulationVisualizer(newsim, plot_outer_layer=PLOT_OUTER_LAYER)
+    run_simulation(newsim, visualizer, n_steps, add_unit_every, save_every, plot_every)
+except Exception as e:
+    print(f"An error occurred: {e}")
+    traceback.print_exc()
+'''
