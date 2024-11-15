@@ -852,6 +852,7 @@ def run_simulation(sim, visualizer, n_steps, add_unit_every, save_every, plot_ev
                 sim.simulate_step()
                 
             sim.save_state()
+            visualizer.update_plot()
             
             total_time = time.time() - start_time
             hours, remainder = divmod(total_time, 3600)
