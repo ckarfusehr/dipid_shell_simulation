@@ -19,11 +19,14 @@ from scipy.spatial import KDTree
 np.seterr(divide='raise', over='raise', under='raise', invalid='raise')
 
 class MolecularDynamicsSimulation:
-    def __init__(self, dt, mass, lengthEq, delta, km, T_C=20, origin=np.zeros(3), method='verlet', damping_coeff=1):
+    def __init__(self, dt, mass, lengthEq, delta, km, T_C=20, origin=np.zeros(3), method='verlet', damping_coeff=1, random_placement = False, random_chance = 0):
         str_datetime = datetime.now().strftime("%Y%m%d%H%M%S")
-        filename = str_datetime + '_sim_' + method + "_dt" + str(dt) + "_delta" + str(delta) + "_km" + str(km)+'_TC' + str(T_C)
+        filename = './simulations/' + str_datetime + '_sim_' + method + "_dt" + str(dt) + "_delta" + str(delta) + "_km" + str(km)+'_TC' + str(T_C)
         if method == 'langevin':
             filename += "_damping" + str(damping_coeff)
+        if random_placement:
+            filename += "_random" + str(random_chance)
+            
         filename += '.pkl'
         self.filename = filename
 
@@ -47,6 +50,9 @@ class MolecularDynamicsSimulation:
 
         self.method = method
         self.damping_coeff = damping_coeff
+
+        self.random_placement = random_placement
+        self.random_chance = random_chance
 
         self.topology = nx.Graph()
 
@@ -392,48 +398,53 @@ class MolecularDynamicsSimulation:
         # Remove any nodes that are no longer in the topology
         boundary_nodes = {node for node in boundary_nodes if node in self.node_id_map}
 
-        angles = []
-
-        # Iterate through all nodes at the boundary
+       
+        # Iterate through all nodes at the boundary and calculate the angle between edges
+        growing_edge_positions = []
         for node in boundary_nodes:
             degree = self.topology.degree(node)
             connected_edges = [edge for edge in self.boundary_edges if node in edge]
             connected_ids = [edge[1] if edge[0] == node else edge[0] for edge in connected_edges]
+            
             if len(connected_ids) < 2:
                 continue  # Skip nodes that don't have at least two boundary connections
+            
             angle = self.calc_angle(node, connected_ids[0], connected_ids[1])
             if degree == 2 or degree == 3:
                 angle = 360.00 - angle
 
-            angle = round(angle,2)
-            entry = {'angle': angle, 'node_id': node, 'degree': degree,
-                     'neighbour_1': connected_ids[0], 'neighbour_2': connected_ids[1]}
-            angles.append(entry)
+            growing_edge_positions.append({'angle': round(angle,2), 'node_id': node, 'degree': degree, 'neighbour_1': connected_ids[0], 'neighbour_2': connected_ids[1]})
 
-        if not angles:
-            print("No valid nodes to add particles.")
+        if not growing_edge_positions:
+            print("No valid positions to add particles.")
             return
 
-        #find next position by getting smalles closing angle (if ambiguous choose randomly)
-        min_angle = min(angles, key=lambda x: x['angle'])
-        min_entries = [x for x in angles if x['angle'] == min_angle['angle']]
-
-        min_entry = []
-        if min_entries and len(min_entries) > 1:
-            print('RANDOM')
-            min_entry = random.choice(min_entries)
+        # If randomness is activated, check if random placement should happen
+        best_candidate = None
+        if self.random_placement and random.random() < self.random_chance:
+            best_candidate = random.choice(list(growing_edge_positions))
+            print(f'POSITION RANDOMLY CHOSEN (happens {self.random_chance*100}% of times)')
+        
+        # Find next position by getting smallest closing angle (if ambiguous choose randomly) <-> equal to get energetically best position on growing edge
         else:
-            print('SINGLE')
-            min_entry = min_entries[0]
+            min_angle = min(growing_edge_positions, key=lambda x: x['angle'])
+            min_entries = [x for x in growing_edge_positions if x['angle'] == min_angle['angle']]
 
-        if min_entry['angle'] < 30:
-            self.close_pentamer(min_entry['node_id'], min_entry['neighbour_1'], min_entry['neighbour_2'])
+            if min_entries and len(min_entries) > 1:
+                best_candidate = random.choice(min_entries)
+            else:
+                best_candidate = min_entries[0]
+                
+            print(f'POSITION CHOSEN RATIONALLY (happens {100-self.random_chance*100}% of times)')
 
-        elif 30 <= min_entry['angle'] <= 60 and min_entry['degree'] == 6:
-            self.close_hexamer(min_entry)
+        if best_candidate['angle'] < 30:
+            self.close_pentamer(best_candidate['node_id'], best_candidate['neighbour_1'], best_candidate['neighbour_2'])
+
+        elif 30 <= best_candidate['angle'] <= 60 and best_candidate['degree'] == 6:
+            self.close_hexamer(best_candidate)
             
-        elif min_entry['degree'] == 7:
-             self.close_pentamer(min_entry['node_id'], min_entry['neighbour_1'], min_entry['neighbour_2'])
+        elif best_candidate['degree'] == 7:   
+            self.close_pentamer(best_candidate['node_id'], best_candidate['neighbour_1'], best_candidate['neighbour_2'])
             
         else:
             # No pentamer or hexamer closure: add new particle
@@ -441,15 +452,15 @@ class MolecularDynamicsSimulation:
             
             node_id = max(self.node_ids) + 1  # Generate new node ID
 
-            self.place_particle(node_id, min_entry['node_id'], min_entry['neighbour_1'])
+            self.place_particle(node_id, best_candidate['node_id'], best_candidate['neighbour_1'])
 
             # Update boundary edges
-            edge_to_remove = tuple(sorted((min_entry['node_id'], min_entry['neighbour_1'])))
+            edge_to_remove = tuple(sorted((best_candidate['node_id'], best_candidate['neighbour_1'])))
             self.boundary_edges.discard(edge_to_remove)
 
             # Add new edges to boundary
-            new_edge1 = tuple(sorted((node_id, min_entry['node_id'])))
-            new_edge2 = tuple(sorted((node_id, min_entry['neighbour_1'])))
+            new_edge1 = tuple(sorted((node_id, best_candidate['node_id'])))
+            new_edge2 = tuple(sorted((node_id, best_candidate['neighbour_1'])))
             self.boundary_edges.add(new_edge1)
             self.boundary_edges.add(new_edge2)
 
@@ -483,7 +494,7 @@ class MolecularDynamicsSimulation:
         self.topology.add_edge(id, edgeStart)
         self.topology.add_edge(id, edgeEnd)
 
-    def fix_topology(self, min_topo_dist=5, max_physical_dist=1.0, check_interval=50, current_step=0):
+    def fix_topology(self, min_topo_dist=5, max_physical_dist=0.8, check_interval=50, current_step=0):
         # Perform check only at specified intervals
         if current_step % check_interval != 0:
             return
@@ -621,7 +632,7 @@ class MolecularDynamicsSimulation:
         self.velocities = vel_flat.reshape(self.N_nodes, 3, 3)
 
     # Load and save
-    def save_state(self):
+    def save_state_simulation(self):
         cd = Path(__file__).parent.resolve()
 
         # Prepare the new state
@@ -643,8 +654,32 @@ class MolecularDynamicsSimulation:
         with open(cd / self.filename, 'wb') as f:
             pickle.dump(self, f)
 
+    def save_state_trajectory(self):
+        cd = Path(__file__).parent.resolve()
+
+        # Prepare the new state
+        state = {
+            'positions': copy.deepcopy(self.positions),
+            'topology': copy.deepcopy(self.topology),
+            'positions_old': copy.deepcopy(self.positions_old),
+            'velocities': copy.deepcopy(self.velocities),
+            'accelerations': copy.deepcopy(self.accelerations),
+            'boundaries': copy.deepcopy(self.boundary_edges),
+            'node_ids': copy.deepcopy(self.node_ids),
+            'node_id_map': copy.deepcopy(self.node_id_map),
+            'N_nodes': copy.deepcopy(self.N_nodes)
+            
+        }
+        self.state_trajectory.append(state)
+
+        filename_trajectory = ''.join(str(self.filename).split('.')[0:-1]) + '_trajectory.pkl'
+
+        # Only pickle self
+        with open(filename_trajectory, 'wb') as f:
+            pickle.dump(self.state_trajectory, f)
+
     @classmethod
-    def load_state(cls, filename, filename_append, start_at=-1):
+    def load_state(cls, filename, filename_append='', start_at=-1):
         with open(filename, 'rb') as f:
             loaded_instance = pickle.load(f)
 
@@ -828,22 +863,33 @@ class SimulationVisualizer:
         plt.pause(0.1)
 
 # Main simulation loop
-def run_simulation(sim, visualizer, n_steps, add_unit_every, save_every, plot_every):
+def run_simulation(sim, visualizer, n_steps, add_unit_every, save_every, plot_every, save_what):
     start_time = time.time()
     for step in range(n_steps):
         if visualizer.stop_simulation:
             print('Simulation stopped by user.')
-            sim.save_state()
+            if save_what == 'simulation':
+                sim.save_state_simulation()
+            elif save_what == 'trajectory':
+                sim.save_state_trajectory()
             break
 
         if step != 0 and step % save_every == 0:
-            sim.save_state()
+            if save_what == 'simulation':
+                sim.save_state_simulation()
+            elif save_what == 'trajectory':
+                sim.save_state_trajectory()
 
         if sim.is_closed_surface():
-            for i in range(200):
+            for i in range(1000):
                 sim.simulate_step()
+            
+            visualizer.update_plot()
                 
-            sim.save_state()
+            if save_what == 'simulation':
+                sim.save_state_simulation()
+            elif save_what == 'trajectory':
+                sim.save_state_trajectory()
             
             total_time = time.time() - start_time
             hours, remainder = divmod(total_time, 3600)
@@ -875,56 +921,61 @@ def run_simulation(sim, visualizer, n_steps, add_unit_every, save_every, plot_ev
     plt.ioff()
     plt.show()
 
-# Simulation parameters
-# FIXED PARAMETERS
-MASS = 1
-A0 = 1
-T_C = 20
-PLOT_OUTER_LAYER = True
-DT = 0.01
-METHOD = 'langevin'
-DAMPING_COEFFICIENT = 0.1
-KM = 0.1
+if __name__ == '__main__':
+    # Simulation parameters
+    # FIXED PARAMETERS
+    MASS = 1
+    A0 = 1
+    T_C = 20
+    PLOT_OUTER_LAYER = True
+    DT = 0.01
+    METHOD = 'langevin'
+    DAMPING_COEFFICIENT = 0.1
+    KM = 0.1
+    RANDOM_PLACEMENT = True
+    RANDOM_CHANCE = 0.05
 
-# DYNAMIC PARAMETERS
-DELTA = 0.15
-
-
-sim = MolecularDynamicsSimulation(
-    dt=DT,
-    mass=MASS,
-    lengthEq=A0,
-    delta=DELTA,
-    km=KM,
-    T_C=T_C,
-    method=METHOD,
-    damping_coeff=DAMPING_COEFFICIENT
-)
-
-visualizer = SimulationVisualizer(sim, plot_outer_layer=PLOT_OUTER_LAYER)
-
-n_steps = 10000000
-add_unit_every = 500
-save_every = 250
-plot_every = 250
+    # DYNAMIC PARAMETERS
+    DELTA = 0.12
 
 
-try:
-    run_simulation(sim, visualizer, n_steps, add_unit_every, save_every, plot_every)
+    sim = MolecularDynamicsSimulation(
+        dt=DT,
+        mass=MASS,
+        lengthEq=A0,
+        delta=DELTA,
+        km=KM,
+        T_C=T_C,
+        method=METHOD,
+        damping_coeff=DAMPING_COEFFICIENT,
+        random_placement=RANDOM_PLACEMENT,
+        random_chance=RANDOM_CHANCE
+    )
 
-except Exception as e:
-    print(f"An error occurred: {e}")
-    traceback.print_exc()
+    visualizer = SimulationVisualizer(sim, plot_outer_layer=PLOT_OUTER_LAYER)
+
+    n_steps = 10000000
+    add_unit_every = 500
+    save_every = 250
+    plot_every = 250
+
+ 
+    try:
+        run_simulation(sim, visualizer, n_steps, add_unit_every, save_every, plot_every, 'simulation')
+
+    except Exception as e:
+        print(f"An error occurred: {e}")
+        traceback.print_exc()
 
 
-# Load and continue simulation if needed
-'''
-try:
-    filename = './20241115133330_sim_langevin_dt0.01_delta0.1_km0.1_TC20_damping0.1_cont1.pkl'
-    newsim = MolecularDynamicsSimulation.load_state(filename, 'cont1', start_at=-30)
-    visualizer = SimulationVisualizer(newsim, plot_outer_layer=PLOT_OUTER_LAYER)
-    run_simulation(newsim, visualizer, n_steps, add_unit_every, save_every, plot_every)
-except Exception as e:
-    print(f"An error occurred: {e}")
-    traceback.print_exc()
-'''
+    # Load and continue simulation if needed
+    '''
+    try:
+        filename = './20241119134515_sim_langevin_dt0.01_delta0.18_km0.1_TC20_damping0.1_cont1.pkl'
+        newsim = MolecularDynamicsSimulation.load_state(filename, 'cont1', start_at=-20)
+        visualizer = SimulationVisualizer(newsim, plot_outer_layer=PLOT_OUTER_LAYER)
+        run_simulation(newsim, visualizer, n_steps, add_unit_every, save_every, plot_every, 'simulation')
+    except Exception as e:
+        print(f"An error occurred: {e}")
+        traceback.print_exc()
+    '''
