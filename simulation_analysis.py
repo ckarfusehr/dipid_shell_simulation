@@ -7,9 +7,10 @@ import networkx as nx
 from typing import Literal
 
 class Ellipsoid:
-    def __init__(self, positions, topology):
-        self.positions = positions
+    def __init__(self, positions, topology, scaling=1):
+        self.positions = positions*scaling
         self.topology = topology
+        self.scaling = scaling
         
         node_ids = sorted(topology.nodes())
         self.node_id_map = {node_id: idx for idx, node_id in enumerate(node_ids)}
@@ -147,14 +148,11 @@ class Ellipsoid:
 
 
 if __name__ == '__main__':
-    PLOT = False
+    PLOT = True
     
     # Load and animate the trajectory
     FILES = [
-        '20241118082041_sim_langevin_dt0.01_delta0.15_km0.1_TC20_damping0.1.pkl',
-        '20241119143840_sim_langevin_dt0.01_delta0.18_km0.1_TC20_damping0.1.pkl',
-        '20241119112555_sim_langevin_dt0.01_delta0.2_km0.1_TC20_damping0.1.pkl',
-        '20241119151447_sim_langevin_dt0.01_delta0.1_km0.1_TC20_damping0.1.pkl'
+        './simulations/20241122155037_sim_langevin_dt0.01_delta0.0928680646883268_km0.1_TC20_damping0.1_random0.05.pkl'
     ]
 
     extracted_data = {}
@@ -173,7 +171,9 @@ if __name__ == '__main__':
         delta = sim_instance.delta
         num_monomers = topology.number_of_nodes()
         
-        ellipsoid = Ellipsoid(positions, topology)
+        scaling = sim_instance.monomer_info['scaling']
+        
+        ellipsoid = Ellipsoid(positions, topology, scaling=scaling)
         ellipsoid.fit_ellipsoid_pca()
         surface_area_triangulation = ellipsoid.calc_surface_area(mode='triangulation')
         surface_area_fit = ellipsoid.calc_surface_area(mode='fit')

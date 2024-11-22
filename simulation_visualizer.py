@@ -11,9 +11,10 @@ from scipy.spatial import KDTree
 from simulation_assembly import MolecularDynamicsSimulation
 
 class SimulationAnimator:
-    def __init__(self, sim_instance, plot_outer_layer=True, loop=False):
+    def __init__(self, sim_instance, scaling=1, plot_outer_layer=True, loop=False):
         self.sim_instance = sim_instance
         self.plot_outer_layer = plot_outer_layer
+        self.scaling = scaling
         self.loop = loop
         self.state_trajectory = sim_instance.state_trajectory
         self.fig = plt.figure()
@@ -25,9 +26,14 @@ class SimulationAnimator:
 
     def initialize_animation(self):
         # Set labels and title
-        self.ax.set_xlabel('X')
-        self.ax.set_ylabel('Y')
-        self.ax.set_zlabel('Z')
+        if self.scaling == 1:
+            self.ax.set_xlabel('x')
+            self.ax.set_ylabel('y')
+            self.ax.set_zlabel('z')
+        else:
+            self.ax.set_xlabel('X (nm)')
+            self.ax.set_ylabel('Y (nm)')
+            self.ax.set_zlabel('Z (nm)')
         self.ax.set_title('Capsid Assembly Simulation')
 
         # Initialize scatter plot
@@ -83,19 +89,24 @@ class SimulationAnimator:
         state = self.state_trajectory[frame]
         positions = state['positions']
         topology = state['topology']
+        
         # Reconstruct node_id_map
         node_ids = sorted(topology.nodes())
         node_id_map = {node_id: idx for idx, node_id in enumerate(node_ids)}
+        
         if self.plot_outer_layer:
             vectors = positions[:, 0, :]
         else:
             vectors = positions.reshape(-1, 3)
-        xs = vectors[:, 0]
-        ys = vectors[:, 1]
-        zs = vectors[:, 2]
+        
+        xs = vectors[:, 0]*self.scaling
+        ys = vectors[:, 1]*self.scaling
+        zs = vectors[:, 2]*self.scaling
+        
         # Colors based on node degree
         node_degrees = dict(topology.degree())
         colors = []
+        
         if self.plot_outer_layer:
             for idx, node_id in enumerate(node_ids):
                 degree = node_degrees.get(node_id, 0)
@@ -115,12 +126,15 @@ class SimulationAnimator:
                         colors.append('blue')
                     else:
                         colors.append('gray')
+        
         self.scatter._offsets3d = (xs, ys, zs)
         self.scatter.set_color(colors)
+        
         # Clear previous edges
         for line in self.edge_lines:
             line.set_data([], [])
             line.set_3d_properties([])
+        
         # Update edges
         current_edges = list(topology.edges())
         edge_count = 0
@@ -134,17 +148,19 @@ class SimulationAnimator:
             else:
                 layers = [0, 1, 2]
             for layer in layers:
-                pos1 = positions[idx1, layer, :]
-                pos2 = positions[idx2, layer, :]
+                pos1 = positions[idx1, layer, :]*self.scaling
+                pos2 = positions[idx2, layer, :]*self.scaling
                 line = self.edge_lines[edge_count]
                 line.set_data([pos1[0], pos2[0]], [pos1[1], pos2[1]])
                 line.set_3d_properties([pos1[2], pos2[2]])
                 edge_count += 1
+        
         # Hide unused edge lines
         for i in range(edge_count, len(self.edge_lines)):
             line = self.edge_lines[i]
             line.set_data([], [])
             line.set_3d_properties([])
+        
         # Adjust plot limits
         margin = 0
         x_min, x_max = min(xs) - margin, max(xs) + margin
@@ -162,14 +178,16 @@ class SimulationAnimator:
     
 if __name__ == '__main__':
     # Load and animate the trajectory
-    filename = '20241119134515_sim_langevin_dt0.01_delta0.18_km0.1_TC20_damping0.1_cont1.pkl'
+    filename = './simulations/20241122155037_sim_langevin_dt0.01_delta0.0928680646883268_km0.1_TC20_damping0.1_random0.05.pkl'
     cd = Path().resolve()
     filepath = cd / filename
 
     sim_instance = MolecularDynamicsSimulation.load_state(filepath)
     sim_instance.state_trajectory = sim_instance.state_trajectory[-50:]
+    
+    scaling_factor = sim_instance.monomer_info['scaling']
 
-    animator = SimulationAnimator(sim_instance, plot_outer_layer=True, loop=False)
+    animator = SimulationAnimator(sim_instance, scaling=scaling_factor, plot_outer_layer=True, loop=False)
 
     # Print node degrees at the last frame
     last_state = sim_instance.state_trajectory[-1]

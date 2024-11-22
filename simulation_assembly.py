@@ -19,7 +19,7 @@ from scipy.spatial import KDTree
 np.seterr(divide='raise', over='raise', under='raise', invalid='raise')
 
 class MolecularDynamicsSimulation:
-    def __init__(self, dt, mass, lengthEq, delta, km, T_C=20, origin=np.zeros(3), method='verlet', damping_coeff=1, random_placement = False, random_chance = 0):
+    def __init__(self, dt, mass, lengthEq, delta, km, T_C=20, origin=np.zeros(3), method='verlet', damping_coeff=1, random_placement = False, random_chance = 0, monomer_info=None):
         str_datetime = datetime.now().strftime("%Y%m%d%H%M%S")
         filename = './simulations/' + str_datetime + '_sim_' + method + "_dt" + str(dt) + "_delta" + str(delta) + "_km" + str(km)+'_TC' + str(T_C)
         if method == 'langevin':
@@ -53,6 +53,8 @@ class MolecularDynamicsSimulation:
 
         self.random_placement = random_placement
         self.random_chance = random_chance
+        
+        self.monomer_info = monomer_info
 
         self.topology = nx.Graph()
 
@@ -739,8 +741,9 @@ class MolecularDynamicsSimulation:
             raise Exception("No valid method chosen")
 
 class SimulationVisualizer:
-    def __init__(self, sim, plot_outer_layer=False):
+    def __init__(self, sim, scaling=1, plot_outer_layer=False):
         self.sim = sim
+        self.scaling = scaling
         self.plot_outer_layer = plot_outer_layer
         self.stop_simulation = False  # Flag to indicate if the simulation should stop
 
@@ -763,9 +766,9 @@ class SimulationVisualizer:
             vectors = self.sim.positions[:, 0, :]
         else:
             vectors = self.sim.positions.reshape(-1, 3)
-        self.xs = vectors[:, 0]
-        self.ys = vectors[:, 1]
-        self.zs = vectors[:, 2]
+        self.xs = vectors[:, 0]*self.scaling
+        self.ys = vectors[:, 1]*self.scaling
+        self.zs = vectors[:, 2]*self.scaling
 
         # Scatter plot for particles
         self.scatter = self.ax.scatter(self.xs, self.ys, self.zs, color='blue', s=20, label='Particles')
@@ -777,8 +780,8 @@ class SimulationVisualizer:
             plot_layers = 1 if self.plot_outer_layer else 3
 
             for j in range(plot_layers):
-                pos1 = self.sim.positions[self.sim.node_id_map[edge[0]], j, :]
-                pos2 = self.sim.positions[self.sim.node_id_map[edge[1]], j, :]
+                pos1 = self.sim.positions[self.sim.node_id_map[edge[0]], j, :]*self.scaling
+                pos2 = self.sim.positions[self.sim.node_id_map[edge[1]], j, :]*self.scaling
 
                 edge_tuple = tuple(sorted(edge))
                 color = 'red' if edge_tuple in self.sim.boundary_edges else 'black'
@@ -787,9 +790,15 @@ class SimulationVisualizer:
                 self.edge_lines.append(line)
 
         # Set labels and title
-        self.ax.set_xlabel('X')
-        self.ax.set_ylabel('Y')
-        self.ax.set_zlabel('Z')
+        if self.scaling == 1:
+            self.ax.set_xlabel('x')
+            self.ax.set_ylabel('y')
+            self.ax.set_zlabel('z')
+        else:
+            self.ax.set_xlabel('X (nm)')
+            self.ax.set_ylabel('Y (nm)')
+            self.ax.set_zlabel('Z (nm)')
+            
         self.ax.set_title('Capsid Assembly Simulation')
 
     def on_close(self, event):
@@ -803,9 +812,9 @@ class SimulationVisualizer:
             vectors = self.sim.positions[:, 0, :]
         else:
             vectors = self.sim.positions.reshape(-1, 3)
-        self.xs = vectors[:, 0]
-        self.ys = vectors[:, 1]
-        self.zs = vectors[:, 2]
+        self.xs = vectors[:, 0]*self.scaling
+        self.ys = vectors[:, 1]*self.scaling
+        self.zs = vectors[:, 2]*self.scaling
 
         # Update the scatter plot for particles
         self.scatter._offsets3d = (self.xs, self.ys, self.zs)
@@ -819,8 +828,8 @@ class SimulationVisualizer:
             plot_layers = 1 if self.plot_outer_layer else 3
 
             for j in range(plot_layers):
-                pos1 = self.sim.positions[self.sim.node_id_map[edge[0]], j, :]
-                pos2 = self.sim.positions[self.sim.node_id_map[edge[1]], j, :]
+                pos1 = self.sim.positions[self.sim.node_id_map[edge[0]], j, :]*self.scaling
+                pos2 = self.sim.positions[self.sim.node_id_map[edge[1]], j, :]*self.scaling
 
                 edge_tuple = tuple(sorted(edge))
                 color = 'red' if edge_tuple in self.sim.boundary_edges else 'black'
@@ -921,11 +930,35 @@ def run_simulation(sim, visualizer, n_steps, add_unit_every, save_every, plot_ev
     plt.ioff()
     plt.show()
 
+def get_sim_params_from_dipid(r_dipid, h_dipid, alpha_sticky_deg, l_sticky, printout=True):
+    angle_sticky_rad = (alpha_sticky_deg/180*np.pi)
+    
+    a_eq = 2*(l_sticky + r_dipid*np.cos(angle_sticky_rad)) - h_dipid*np.cos(np.pi/2-angle_sticky_rad)
+    delta_eq = (h_dipid/2)*np.cos(np.pi/2 - angle_sticky_rad)
+    
+    a_eq_sim = a_eq/a_eq
+    delta_eq_sim = delta_eq/a_eq
+    
+    scaling = a_eq
+    
+    if printout:
+        print(f'Used DIPID parameters are:')
+        print(f'Radius DIPID r_dipid={r_dipid}nm')
+        print(f'Height DIPID: h_dipid={h_dipid}nm')
+        print(f'Length max. sticky connector: l_sticky={l_sticky}nm')
+        print(f'Half binding angle: alpha_sticky_deg={alpha_sticky_deg}°')
+        print()
+        print(f'Simulation equilibrium length: a_eq_sim={a_eq_sim}')
+        print(f'Simulation equilibrium asymmetry: delta_eq_sim={delta_eq_sim}')
+        print(f'Scaling factor sim_units -> physical_units: scaling={scaling}')
+    
+    return a_eq_sim, delta_eq_sim, scaling
+
+
 if __name__ == '__main__':
     # Simulation parameters
     # FIXED PARAMETERS
     MASS = 1
-    A0 = 1
     T_C = 20
     PLOT_OUTER_LAYER = True
     DT = 0.01
@@ -935,9 +968,21 @@ if __name__ == '__main__':
     RANDOM_PLACEMENT = True
     RANDOM_CHANCE = 0.05
 
-    # DYNAMIC PARAMETERS
-    DELTA = 0.12
+    # DIPID PARAMETERS
+    r_dipid = 14
+    h_dipid = 2*10
+    alpha_sticky_deg = 15
+    l_sticky = 3
 
+    # DYNAMIC PARAMETERS
+    A0, DELTA, SCALING = get_sim_params_from_dipid(r_dipid, h_dipid, alpha_sticky_deg, l_sticky)
+
+    #Packing DIPID info and passing to Simulation class to use later in analysis
+    MONOMER_INFO = {'radius': r_dipid,
+                    'height': h_dipid,
+                    'alpha_binding': alpha_sticky_deg,
+                    'length_sticky': l_sticky,
+                    'scaling': SCALING}
 
     sim = MolecularDynamicsSimulation(
         dt=DT,
@@ -949,20 +994,19 @@ if __name__ == '__main__':
         method=METHOD,
         damping_coeff=DAMPING_COEFFICIENT,
         random_placement=RANDOM_PLACEMENT,
-        random_chance=RANDOM_CHANCE
+        random_chance=RANDOM_CHANCE,
+        monomer_info=MONOMER_INFO
     )
 
-    visualizer = SimulationVisualizer(sim, plot_outer_layer=PLOT_OUTER_LAYER)
+    visualizer = SimulationVisualizer(sim, scaling=SCALING, plot_outer_layer=PLOT_OUTER_LAYER)
 
     n_steps = 10000000
     add_unit_every = 500
     save_every = 250
     plot_every = 250
 
- 
     try:
         run_simulation(sim, visualizer, n_steps, add_unit_every, save_every, plot_every, 'simulation')
-
     except Exception as e:
         print(f"An error occurred: {e}")
         traceback.print_exc()
