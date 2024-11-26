@@ -8,6 +8,7 @@ from pathlib import Path
 import cProfile
 from datetime import datetime
 import random
+import argparse
 
 import matplotlib.pyplot as plt
 
@@ -954,8 +955,17 @@ def get_sim_params_from_dipid(r_dipid, h_dipid, alpha_sticky_deg, l_sticky, prin
     
     return a_eq_sim, delta_eq_sim, scaling
 
-
 if __name__ == '__main__':
+    # Parse command-line arguments
+    parser = argparse.ArgumentParser(description="Run molecular dynamics simulation with specified parameters.")
+    parser.add_argument('--alpha_sticky_deg', type=float, default=15, help="Alpha sticky degree (default: 15)")
+    parser.add_argument('--l_sticky', type=float, default=3, help="Length of sticky region (default: 3)")
+    parser.add_argument('--save_every', type=int, default=250, help="Steps interval to save simulation state (default: 250)")
+    parser.add_argument('--plot_every', type=int, default=250, help="Steps interval to plot simulation state (default: 250)")
+    parser.add_argument('--n_steps', type=int, default=10000000, help="Total number of simulation steps (default: 10000000)")
+
+    args = parser.parse_args()
+
     # Simulation parameters
     # FIXED PARAMETERS
     MASS = 1
@@ -965,24 +975,26 @@ if __name__ == '__main__':
     METHOD = 'langevin'
     DAMPING_COEFFICIENT = 0.1
     KM = 0.1
-    RANDOM_PLACEMENT = True
+    RANDOM_PLACEMENT = False
     RANDOM_CHANCE = 0.05
 
     # DIPID PARAMETERS
     r_dipid = 14
-    h_dipid = 2*10
-    alpha_sticky_deg = 15
-    l_sticky = 3
+    h_dipid = 2 * 10
+    alpha_sticky_deg = args.alpha_sticky_deg
+    l_sticky = args.l_sticky
 
     # DYNAMIC PARAMETERS
     A0, DELTA, SCALING = get_sim_params_from_dipid(r_dipid, h_dipid, alpha_sticky_deg, l_sticky)
 
-    #Packing DIPID info and passing to Simulation class to use later in analysis
-    MONOMER_INFO = {'radius': r_dipid,
-                    'height': h_dipid,
-                    'alpha_binding': alpha_sticky_deg,
-                    'length_sticky': l_sticky,
-                    'scaling': SCALING}
+    # Packing DIPID info and passing to Simulation class to use later in analysis
+    MONOMER_INFO = {
+        'radius': r_dipid,
+        'height': h_dipid,
+        'alpha_binding': alpha_sticky_deg,
+        'length_sticky': l_sticky,
+        'scaling': SCALING
+    }
 
     sim = MolecularDynamicsSimulation(
         dt=DT,
@@ -1000,17 +1012,16 @@ if __name__ == '__main__':
 
     visualizer = SimulationVisualizer(sim, scaling=SCALING, plot_outer_layer=PLOT_OUTER_LAYER)
 
-    n_steps = 10000000
+    n_steps = args.n_steps
     add_unit_every = 500
-    save_every = 250
-    plot_every = 250
+    save_every = args.save_every
+    plot_every = args.plot_every
 
     try:
         run_simulation(sim, visualizer, n_steps, add_unit_every, save_every, plot_every, 'simulation')
     except Exception as e:
         print(f"An error occurred: {e}")
         traceback.print_exc()
-
 
     # Load and continue simulation if needed
     '''
