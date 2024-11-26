@@ -944,13 +944,15 @@ def run_simulation(sim, visualizer, n_steps, add_unit_every, save_every, plot_ev
         
 
 def get_sim_params_from_dipid(r_dipid, h_dipid, alpha_sticky_deg, l_sticky, printout=True):
-    angle_sticky_rad = (alpha_sticky_deg/180*np.pi)
+    angle_sticky_rad = np.radians(alpha_sticky_deg)
     
-    a_eq = 2*(l_sticky + r_dipid*np.cos(angle_sticky_rad)) - h_dipid*np.cos(np.pi/2-angle_sticky_rad)
-    delta_eq = (h_dipid/2)*np.cos(np.pi/2 - angle_sticky_rad)
+    r_container = (r_dipid+3.96)/angle_sticky_rad
+    a_eq = 2*(np.sin(angle_sticky_rad)*(r_container+0.5*h_dipid)) #2*(l_sticky + r_dipid*np.cos(angle_sticky_rad)) - h_dipid*np.cos(np.pi/2-angle_sticky_rad)
+    delta_eq = l_sticky #/2 #(h_dipid/2)*np.cos(np.pi/2 - angle_sticky_rad) # nm 
     
     a_eq_sim = a_eq/a_eq
     delta_eq_sim = delta_eq/a_eq
+    delta_eq_sim
     
     scaling = a_eq
     
@@ -997,10 +999,10 @@ if __name__ == '__main__':
     random_chance = args.random_chance
 
     # DIPID PARAMETERS
-    r_dipid = 14
-    h_dipid = 2 * 10
+    r_dipid = 14.25 #nm
+    h_dipid = 18 #nm
     alpha_sticky_deg = args.alpha_sticky_deg
-    l_sticky = args.l_sticky
+    l_sticky = np.tan(alpha_sticky_deg)* h_dipid #nm 
 
     # RUN FLAVOUR
     batch_mode = args.batch_mode

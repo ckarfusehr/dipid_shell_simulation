@@ -29,8 +29,8 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='Run multiple simulations based on configuration file.')
     parser.add_argument('--config_file', type=str, default='simulation_config.yaml', help='Path to the configuration file')
     parser.add_argument('--n_steps', type=int, default=10000000, help='Number of steps for each simulation (default: 10000000)')
-    parser.add_argument('--max_concurrent', type=int, default=4, help='Maximum number of concurrent simulations (default: 4)')
-    parser.add_argument('--save_every', type=int, default=5000, help='Frequency to save simulation (default: 5000)')
+    parser.add_argument('--max_concurrent', type=int, default=18, help='Maximum number of concurrent simulations (default: 4)')
+    parser.add_argument('--save_every', type=int, default=10000, help='Frequency to save simulation (default: 5000)')
     parser.add_argument('--plot_every', type=int, default=5000, help='Frequency to plot simulation (default: 5000)')
     args = parser.parse_args()
 
@@ -49,36 +49,37 @@ if __name__ == "__main__":
     processes = []
     for sim_entry in simulations:
         l_sticky = sim_entry.get('l_sticky', 3.0)
-        alpha_sticky_deg = sim_entry.get('alpha_sticky_deg', 15.0)
         random_placement = sim_entry.get('random_placement', False)
         random_chance = sim_entry.get('random_chance', 0.0)
         repeats = sim_entry.get('repeats', 1)
+        alpha_values = sim_entry.get('alpha_sticky_deg_values', [])
 
-        for i in range(repeats):
-            # Start the subprocess
-            process = run_simulation_subprocess(
-                l_sticky,
-                alpha_sticky_deg,
-                n_steps,
-                save_every,
-                plot_every,
-                random_placement,
-                random_chance,
-                batch_mode=True
-            )
-            processes.append(process)
+        for alpha_sticky_deg in alpha_values:
+            for i in range(repeats):
+                # Start the subprocess
+                process = run_simulation_subprocess(
+                    l_sticky,
+                    alpha_sticky_deg,
+                    n_steps,
+                    save_every,
+                    plot_every,
+                    random_placement,
+                    random_chance,
+                    batch_mode=True
+                )
+                processes.append(process)
 
-            # Check if we've reached the maximum number of concurrent processes
-            while len(processes) >= max_concurrent_processes:
-                # Poll processes to see if any have finished
-                for p in processes:
-                    if p.poll() is not None:
-                        # Process has finished
-                        processes.remove(p)
-                        break
-                else:
-                    # No processes have finished yet; wait a bit before checking again
-                    time.sleep(1)
+                # Check if we've reached the maximum number of concurrent processes
+                while len(processes) >= max_concurrent_processes:
+                    # Poll processes to see if any have finished
+                    for p in processes:
+                        if p.poll() is not None:
+                            # Process has finished
+                            processes.remove(p)
+                            break
+                    else:
+                        # No processes have finished yet; wait a bit before checking again
+                        time.sleep(1)
 
     # Wait for any remaining processes to finish
     for p in processes:
