@@ -876,7 +876,7 @@ class SimulationVisualizer:
 def run_simulation(sim, visualizer, n_steps, add_unit_every, save_every, plot_every, save_what):
     start_time = time.time()
     for step in range(n_steps):
-        if visualizer.stop_simulation:
+        if visualizer is not None and visualizer.stop_simulation:
             print('Simulation stopped by user.')
             if save_what == 'simulation':
                 sim.save_state_simulation()
@@ -894,7 +894,8 @@ def run_simulation(sim, visualizer, n_steps, add_unit_every, save_every, plot_ev
             for i in range(1000):
                 sim.simulate_step()
             
-            visualizer.update_plot()
+            if visualizer is not None:
+                visualizer.update_plot()
                 
             if save_what == 'simulation':
                 sim.save_state_simulation()
@@ -916,7 +917,7 @@ def run_simulation(sim, visualizer, n_steps, add_unit_every, save_every, plot_ev
         if step != 0 and step % add_unit_every == 0:
             sim.next_position()
 
-        if step % plot_every == 0:
+        if step % plot_every == 0 and visualizer is not None:
             visualizer.update_plot()
             #print(f'E_total = {sim.calcTotalEnergy()}')
 
@@ -927,9 +928,13 @@ def run_simulation(sim, visualizer, n_steps, add_unit_every, save_every, plot_ev
         if (step % 250):
             sim.fix_cycles()
 
-    # Keep the plot open after simulation ends
-    plt.ioff()
-    plt.show()
+    # Keep the plot open after simulation ends, if visualizer exists
+    if visualizer is not None: # in batch mode, visualizer is None
+        plt.ioff()
+        plt.show()
+
+
+        
 
 def get_sim_params_from_dipid(r_dipid, h_dipid, alpha_sticky_deg, l_sticky, printout=True):
     angle_sticky_rad = (alpha_sticky_deg/180*np.pi)
@@ -963,6 +968,10 @@ if __name__ == '__main__':
     parser.add_argument('--save_every', type=int, default=250, help="Steps interval to save simulation state (default: 250)")
     parser.add_argument('--plot_every', type=int, default=250, help="Steps interval to plot simulation state (default: 250)")
     parser.add_argument('--n_steps', type=int, default=10000000, help="Total number of simulation steps (default: 10000000)")
+    parser.add_argument('--batch_mode', default=False, action='store_true', help="Run simulation in batch mode without plotting")
+    parser.add_argument('--random_placement', type=bool, default=False, help="If True, monomers are placed randomly with random_chance")
+    parser.add_argument('--random_chance', type=float, default=0.005, help="Chance of randomly placing a monomer")
+
 
     args = parser.parse_args()
 
@@ -975,14 +984,19 @@ if __name__ == '__main__':
     METHOD = 'langevin'
     DAMPING_COEFFICIENT = 0.1
     KM = 0.1
-    RANDOM_PLACEMENT = False
-    RANDOM_CHANCE = 0.05
+    
+    # VARIABLE SIMULATION PARAMETERS
+    random_placement = args.random_placement
+    random_chance = args.random_chance
 
     # DIPID PARAMETERS
     r_dipid = 14
     h_dipid = 2 * 10
     alpha_sticky_deg = args.alpha_sticky_deg
     l_sticky = args.l_sticky
+
+    # RUN FLAVOUR
+    batch_mode = args.batch_mode
 
     # DYNAMIC PARAMETERS
     A0, DELTA, SCALING = get_sim_params_from_dipid(r_dipid, h_dipid, alpha_sticky_deg, l_sticky)
@@ -1005,12 +1019,16 @@ if __name__ == '__main__':
         T_C=T_C,
         method=METHOD,
         damping_coeff=DAMPING_COEFFICIENT,
-        random_placement=RANDOM_PLACEMENT,
-        random_chance=RANDOM_CHANCE,
+        random_placement=random_placement,
+        random_chance=random_chance,
         monomer_info=MONOMER_INFO
     )
 
-    visualizer = SimulationVisualizer(sim, scaling=SCALING, plot_outer_layer=PLOT_OUTER_LAYER)
+    if not args.batch_mode:
+        visualizer = SimulationVisualizer(sim, scaling=SCALING, plot_outer_layer=PLOT_OUTER_LAYER)
+    else:
+        visualizer = None  # No visualizer in batch mode
+
 
     n_steps = args.n_steps
     add_unit_every = 500
