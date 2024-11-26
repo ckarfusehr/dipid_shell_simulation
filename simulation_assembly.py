@@ -975,8 +975,8 @@ if __name__ == '__main__':
     parser.add_argument('--save_every', type=int, default=250, help="Steps interval to save simulation state (default: 250)")
     parser.add_argument('--plot_every', type=int, default=250, help="Steps interval to plot simulation state (default: 250)")
     parser.add_argument('--n_steps', type=int, default=10000000, help="Total number of simulation steps (default: 10000000)")
-    parser.add_argument('--batch_mode', type=bool, default=False, help="Run simulation in batch mode without plotting")
-    parser.add_argument('--random_placement', type=bool, default=False, help="If True, monomers are placed randomly with random_chance")
+    parser.add_argument('--batch_mode', action='store_true', help="Run simulation in batch mode without plotting")
+    parser.add_argument('--random_placement', action='store_true', help="Place monomers randomly with random_chance")
     parser.add_argument('--random_chance', type=float, default=0.005, help="Chance of randomly placing a monomer")
 
 
