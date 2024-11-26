@@ -1,0 +1,26 @@
+simulations:
+  # Simulations without random placement
+  - l_sticky: 3.0
+    alpha_sticky_deg: 39
+    random_placement: False
+    random_chance: 0.0
+    repeats: 1
+
+  - l_sticky: 4.0
+    alpha_sticky_deg: 40.0
+    random_placement: False
+    random_chance: 0.0
+    repeats: 1
+
+  # Simulations with random placement (6 repeats each)
+  - l_sticky: 3.0
+    alpha_sticky_deg: 39.0
+    random_placement: True
+    random_chance: 0.05
+    repeats: 3
+
+  - l_sticky: 4.0
+    alpha_sticky_deg: 40.0
+    random_placement: True
+    random_chance: 0.05
+    repeats: 3
