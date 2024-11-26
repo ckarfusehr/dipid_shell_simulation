@@ -20,7 +20,7 @@ from scipy.spatial import KDTree
 np.seterr(divide='raise', over='raise', under='raise', invalid='raise')
 
 class MolecularDynamicsSimulation:
-    def __init__(self, dt, mass, lengthEq, delta, km, T_C=20, origin=np.zeros(3), method='verlet', damping_coeff=1, random_placement = False, random_chance = 0, monomer_info=None):
+    def __init__(self, dt, mass, lengthEq, delta, km, T_C=20, origin=np.zeros(3), method='verlet', damping_coeff=1, random_placement = False, random_chance = 0, monomer_info=None, batch_mode=False):
         str_datetime = datetime.now().strftime("%Y%m%d%H%M%S")
         filename = './simulations/' + str_datetime + '_sim_' + method + "_dt" + str(dt) + "_delta" + str(delta) + "_km" + str(km)+'_TC' + str(T_C)
         if method == 'langevin':
@@ -58,6 +58,8 @@ class MolecularDynamicsSimulation:
         self.monomer_info = monomer_info
 
         self.topology = nx.Graph()
+        
+        self.batch_mode = batch_mode
 
         # Holds the initial 9 particles constituting the first unit cell (a triangular prism)
         initial_positions = self.create_monomer()
@@ -328,7 +330,8 @@ class MolecularDynamicsSimulation:
         return totalEnergy
 
     def close_pentamer(self, node_id, neighbour_1, neighbour_2):
-        print("CLOSE AS PENTAMER")
+        if not self.batch_mode:
+            print("CLOSE AS PENTAMER")
 
         # Remove the two edges connected to neighbour_2 from boundary_edges
         edge1 = tuple(sorted((node_id, neighbour_1)))
@@ -363,7 +366,8 @@ class MolecularDynamicsSimulation:
                 self.node_id_map[node_id] = idx - 1
 
     def close_hexamer(self, min_entry):
-        print("CLOSE AS HEXAMER")
+        if not self.batch_mode:
+            print("CLOSE AS HEXAMER")
         
         # Close as Hexamer
         edge1 = tuple(sorted((min_entry['node_id'], min_entry['neighbour_1'])))
@@ -426,7 +430,8 @@ class MolecularDynamicsSimulation:
         best_candidate = None
         if self.random_placement and random.random() < self.random_chance:
             best_candidate = random.choice(list(growing_edge_positions))
-            print(f'POSITION RANDOMLY CHOSEN (happens {self.random_chance*100}% of times)')
+            if not self.batch_mode:
+                print(f'POSITION RANDOMLY CHOSEN (happens {self.random_chance*100}% of times)')
         
         # Find next position by getting smallest closing angle (if ambiguous choose randomly) <-> equal to get energetically best position on growing edge
         else:
@@ -437,8 +442,8 @@ class MolecularDynamicsSimulation:
                 best_candidate = random.choice(min_entries)
             else:
                 best_candidate = min_entries[0]
-                
-            print(f'POSITION CHOSEN RATIONALLY (happens {100-self.random_chance*100}% of times)')
+            if not self.batch_mode:
+                print(f'POSITION CHOSEN RATIONALLY (happens {100-self.random_chance*100}% of times)')
 
         if best_candidate['angle'] < 30:
             self.close_pentamer(best_candidate['node_id'], best_candidate['neighbour_1'], best_candidate['neighbour_2'])
@@ -451,7 +456,8 @@ class MolecularDynamicsSimulation:
             
         else:
             # No pentamer or hexamer closure: add new particle
-            print(f"ADD NEW PARTICLE (TOTAL_NUM_PARTICLES={self.getParticleCount()})")
+            if not self.batch_mode:
+                print(f"ADD NEW PARTICLE (TOTAL_NUM_PARTICLES={self.getParticleCount()})")
             
             node_id = max(self.node_ids) + 1  # Generate new node ID
 
@@ -525,7 +531,8 @@ class MolecularDynamicsSimulation:
                 if other_node in self.node_id_map and nx.has_path(self.topology, node, other_node):
                     topo_dist = nx.shortest_path_length(self.topology, source=node, target=other_node)
                     if topo_dist >= min_topo_dist:
-                        print('FIXING EVENT OCCURRED')
+                        if not self.batch_mode:
+                            print('FIXING EVENT OCCURRED')
 
                         # Merge neighbor relationships from other_node to node
                         for neighbor in list(self.topology.neighbors(other_node)):
@@ -1021,7 +1028,8 @@ if __name__ == '__main__':
         damping_coeff=DAMPING_COEFFICIENT,
         random_placement=random_placement,
         random_chance=random_chance,
-        monomer_info=MONOMER_INFO
+        monomer_info=MONOMER_INFO,
+        batch_mode=batch_mode
     )
 
     if not args.batch_mode:
