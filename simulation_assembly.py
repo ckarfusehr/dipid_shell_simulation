@@ -952,7 +952,7 @@ def get_sim_params_from_dipid(r_dipid, h_dipid, alpha_sticky_deg, l_sticky, prin
     
     a_eq_sim = a_eq/a_eq
     delta_eq_sim = delta_eq/a_eq
-    delta_eq_sim
+    #delta_eq_sim
     
     scaling = a_eq
     
@@ -973,7 +973,6 @@ if __name__ == '__main__':
     # Parse command-line arguments
     parser = argparse.ArgumentParser(description="Run molecular dynamics simulation with specified parameters.")
     parser.add_argument('--alpha_sticky_deg', type=float, default=15, help="Alpha sticky degree (default: 15)")
-    parser.add_argument('--l_sticky', type=float, default=3, help="Length of sticky region (default: 3)")
     parser.add_argument('--save_every', type=int, default=250, help="Steps interval to save simulation state (default: 250)")
     parser.add_argument('--plot_every', type=int, default=250, help="Steps interval to plot simulation state (default: 250)")
     parser.add_argument('--n_steps', type=int, default=10000000, help="Total number of simulation steps (default: 10000000)")
@@ -1002,7 +1001,7 @@ if __name__ == '__main__':
     r_dipid = 14.25 #nm
     h_dipid = 18 #nm
     alpha_sticky_deg = args.alpha_sticky_deg
-    l_sticky = np.tan(alpha_sticky_deg)* h_dipid #nm 
+    l_sticky = np.tan(np.radians(alpha_sticky_deg))* h_dipid #nm 
 
     # RUN FLAVOUR
     batch_mode = args.batch_mode

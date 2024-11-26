@@ -3,11 +3,10 @@ import time
 import argparse
 import yaml
 
-def run_simulation_subprocess(l_sticky_value, alpha_sticky_deg_value, n_steps, save_every, plot_every, random_placement, random_chance, batch_mode=True):
+def run_simulation_subprocess(alpha_sticky_deg_value, n_steps, save_every, plot_every, random_placement, random_chance, batch_mode=True):
     # Build the command to run your simulation script with arguments
     command = [
-        'python', 'simulation_assembly.py',  # Replace with your actual script name
-        '--l_sticky', str(l_sticky_value),
+        'python', 'simulation_assembly.py',  # Replace with your actual script name,
         '--alpha_sticky_deg', str(alpha_sticky_deg_value),
         '--n_steps', str(n_steps),
         '--save_every', str(save_every),
@@ -48,7 +47,6 @@ if __name__ == "__main__":
 
     processes = []
     for sim_entry in simulations:
-        l_sticky = sim_entry.get('l_sticky', 3.0)
         random_placement = sim_entry.get('random_placement', False)
         random_chance = sim_entry.get('random_chance', 0.0)
         repeats = sim_entry.get('repeats', 1)
@@ -58,7 +56,6 @@ if __name__ == "__main__":
             for i in range(repeats):
                 # Start the subprocess
                 process = run_simulation_subprocess(
-                    l_sticky,
                     alpha_sticky_deg,
                     n_steps,
                     save_every,
