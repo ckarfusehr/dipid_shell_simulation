@@ -8,6 +8,7 @@ from pathlib import Path
 import cProfile
 from datetime import datetime
 import random
+import argparse
 
 import matplotlib.pyplot as plt
 
@@ -19,7 +20,7 @@ from scipy.spatial import KDTree
 np.seterr(divide='raise', over='raise', under='raise', invalid='raise')
 
 class MolecularDynamicsSimulation:
-    def __init__(self, dt, mass, lengthEq, delta, km, T_C=20, origin=np.zeros(3), method='verlet', damping_coeff=1, random_placement = False, random_chance = 0, monomer_info=None):
+    def __init__(self, dt, mass, lengthEq, delta, km, T_C=20, origin=np.zeros(3), method='verlet', damping_coeff=1, random_placement = False, random_chance = 0, monomer_info=None, batch_mode=False):
         str_datetime = datetime.now().strftime("%Y%m%d%H%M%S")
         filename = './simulations/' + str_datetime + '_sim_' + method + "_dt" + str(dt) + "_delta" + str(delta) + "_km" + str(km)+'_TC' + str(T_C)
         if method == 'langevin':
@@ -57,6 +58,8 @@ class MolecularDynamicsSimulation:
         self.monomer_info = monomer_info
 
         self.topology = nx.Graph()
+        
+        self.batch_mode = batch_mode
 
         # Holds the initial 9 particles constituting the first unit cell (a triangular prism)
         initial_positions = self.create_monomer()
@@ -327,7 +330,8 @@ class MolecularDynamicsSimulation:
         return totalEnergy
 
     def close_pentamer(self, node_id, neighbour_1, neighbour_2):
-        print("CLOSE AS PENTAMER")
+        if not self.batch_mode:
+            print("CLOSE AS PENTAMER")
 
         # Remove the two edges connected to neighbour_2 from boundary_edges
         edge1 = tuple(sorted((node_id, neighbour_1)))
@@ -362,7 +366,8 @@ class MolecularDynamicsSimulation:
                 self.node_id_map[node_id] = idx - 1
 
     def close_hexamer(self, min_entry):
-        print("CLOSE AS HEXAMER")
+        if not self.batch_mode:
+            print("CLOSE AS HEXAMER")
         
         # Close as Hexamer
         edge1 = tuple(sorted((min_entry['node_id'], min_entry['neighbour_1'])))
@@ -425,7 +430,8 @@ class MolecularDynamicsSimulation:
         best_candidate = None
         if self.random_placement and random.random() < self.random_chance:
             best_candidate = random.choice(list(growing_edge_positions))
-            print(f'POSITION RANDOMLY CHOSEN (happens {self.random_chance*100}% of times)')
+            if not self.batch_mode:
+                print(f'POSITION RANDOMLY CHOSEN (happens {self.random_chance*100}% of times)')
         
         # Find next position by getting smallest closing angle (if ambiguous choose randomly) <-> equal to get energetically best position on growing edge
         else:
@@ -436,8 +442,8 @@ class MolecularDynamicsSimulation:
                 best_candidate = random.choice(min_entries)
             else:
                 best_candidate = min_entries[0]
-                
-            print(f'POSITION CHOSEN RATIONALLY (happens {100-self.random_chance*100}% of times)')
+            if not self.batch_mode:
+                print(f'POSITION CHOSEN RATIONALLY (happens {100-self.random_chance*100}% of times)')
 
         if best_candidate['angle'] < 30:
             self.close_pentamer(best_candidate['node_id'], best_candidate['neighbour_1'], best_candidate['neighbour_2'])
@@ -450,7 +456,8 @@ class MolecularDynamicsSimulation:
             
         else:
             # No pentamer or hexamer closure: add new particle
-            print(f"ADD NEW PARTICLE (TOTAL_NUM_PARTICLES={self.getParticleCount()})")
+            if not self.batch_mode:
+                print(f"ADD NEW PARTICLE (TOTAL_NUM_PARTICLES={self.getParticleCount()})")
             
             node_id = max(self.node_ids) + 1  # Generate new node ID
 
@@ -524,7 +531,8 @@ class MolecularDynamicsSimulation:
                 if other_node in self.node_id_map and nx.has_path(self.topology, node, other_node):
                     topo_dist = nx.shortest_path_length(self.topology, source=node, target=other_node)
                     if topo_dist >= min_topo_dist:
-                        print('FIXING EVENT OCCURRED')
+                        if not self.batch_mode:
+                            print('FIXING EVENT OCCURRED')
 
                         # Merge neighbor relationships from other_node to node
                         for neighbor in list(self.topology.neighbors(other_node)):
@@ -875,7 +883,7 @@ class SimulationVisualizer:
 def run_simulation(sim, visualizer, n_steps, add_unit_every, save_every, plot_every, save_what):
     start_time = time.time()
     for step in range(n_steps):
-        if visualizer.stop_simulation:
+        if visualizer is not None and visualizer.stop_simulation:
             print('Simulation stopped by user.')
             if save_what == 'simulation':
                 sim.save_state_simulation()
@@ -893,7 +901,8 @@ def run_simulation(sim, visualizer, n_steps, add_unit_every, save_every, plot_ev
             for i in range(1000):
                 sim.simulate_step()
             
-            visualizer.update_plot()
+            if visualizer is not None:
+                visualizer.update_plot()
                 
             if save_what == 'simulation':
                 sim.save_state_simulation()
@@ -915,7 +924,7 @@ def run_simulation(sim, visualizer, n_steps, add_unit_every, save_every, plot_ev
         if step != 0 and step % add_unit_every == 0:
             sim.next_position()
 
-        if step % plot_every == 0:
+        if step % plot_every == 0 and visualizer is not None:
             visualizer.update_plot()
             #print(f'E_total = {sim.calcTotalEnergy()}')
 
@@ -926,18 +935,24 @@ def run_simulation(sim, visualizer, n_steps, add_unit_every, save_every, plot_ev
         if (step % 250):
             sim.fix_cycles()
 
-    # Keep the plot open after simulation ends
-    plt.ioff()
-    plt.show()
+    # Keep the plot open after simulation ends, if visualizer exists
+    if visualizer is not None: # in batch mode, visualizer is None
+        plt.ioff()
+        plt.show()
+
+
+        
 
 def get_sim_params_from_dipid(r_dipid, h_dipid, alpha_sticky_deg, l_sticky, printout=True):
-    angle_sticky_rad = (alpha_sticky_deg/180*np.pi)
+    angle_sticky_rad = np.radians(alpha_sticky_deg)
     
-    a_eq = 2*(l_sticky + r_dipid*np.cos(angle_sticky_rad)) - h_dipid*np.cos(np.pi/2-angle_sticky_rad)
-    delta_eq = (h_dipid/2)*np.cos(np.pi/2 - angle_sticky_rad)
+    r_container = (r_dipid+3.96)/angle_sticky_rad
+    a_eq = 2*(np.sin(angle_sticky_rad)*(r_container+0.5*h_dipid)) #2*(l_sticky + r_dipid*np.cos(angle_sticky_rad)) - h_dipid*np.cos(np.pi/2-angle_sticky_rad)
+    delta_eq = l_sticky #/2 #(h_dipid/2)*np.cos(np.pi/2 - angle_sticky_rad) # nm 
     
     a_eq_sim = a_eq/a_eq
     delta_eq_sim = delta_eq/a_eq
+    #delta_eq_sim
     
     scaling = a_eq
     
@@ -954,8 +969,20 @@ def get_sim_params_from_dipid(r_dipid, h_dipid, alpha_sticky_deg, l_sticky, prin
     
     return a_eq_sim, delta_eq_sim, scaling
 
-
 if __name__ == '__main__':
+    # Parse command-line arguments
+    parser = argparse.ArgumentParser(description="Run molecular dynamics simulation with specified parameters.")
+    parser.add_argument('--alpha_sticky_deg', type=float, default=15, help="Alpha sticky degree (default: 15)")
+    parser.add_argument('--save_every', type=int, default=250, help="Steps interval to save simulation state (default: 250)")
+    parser.add_argument('--plot_every', type=int, default=250, help="Steps interval to plot simulation state (default: 250)")
+    parser.add_argument('--n_steps', type=int, default=10000000, help="Total number of simulation steps (default: 10000000)")
+    parser.add_argument('--batch_mode', action='store_true', help="Run simulation in batch mode without plotting")
+    parser.add_argument('--random_placement', action='store_true', help="Place monomers randomly with random_chance")
+    parser.add_argument('--random_chance', type=float, default=0.005, help="Chance of randomly placing a monomer")
+
+
+    args = parser.parse_args()
+
     # Simulation parameters
     # FIXED PARAMETERS
     MASS = 1
@@ -965,24 +992,31 @@ if __name__ == '__main__':
     METHOD = 'langevin'
     DAMPING_COEFFICIENT = 0.1
     KM = 0.1
-    RANDOM_PLACEMENT = True
-    RANDOM_CHANCE = 0.05
+    
+    # VARIABLE SIMULATION PARAMETERS
+    random_placement = args.random_placement
+    random_chance = args.random_chance
 
     # DIPID PARAMETERS
-    r_dipid = 14
-    h_dipid = 2*10
-    alpha_sticky_deg = 15
-    l_sticky = 3
+    r_dipid = 14.25 #nm
+    h_dipid = 18 #nm
+    alpha_sticky_deg = args.alpha_sticky_deg
+    l_sticky = np.tan(np.radians(alpha_sticky_deg))* h_dipid #nm 
+
+    # RUN FLAVOUR
+    batch_mode = args.batch_mode
 
     # DYNAMIC PARAMETERS
     A0, DELTA, SCALING = get_sim_params_from_dipid(r_dipid, h_dipid, alpha_sticky_deg, l_sticky)
 
-    #Packing DIPID info and passing to Simulation class to use later in analysis
-    MONOMER_INFO = {'radius': r_dipid,
-                    'height': h_dipid,
-                    'alpha_binding': alpha_sticky_deg,
-                    'length_sticky': l_sticky,
-                    'scaling': SCALING}
+    # Packing DIPID info and passing to Simulation class to use later in analysis
+    MONOMER_INFO = {
+        'radius': r_dipid,
+        'height': h_dipid,
+        'alpha_binding': alpha_sticky_deg,
+        'length_sticky': l_sticky,
+        'scaling': SCALING
+    }
 
     sim = MolecularDynamicsSimulation(
         dt=DT,
@@ -993,24 +1027,28 @@ if __name__ == '__main__':
         T_C=T_C,
         method=METHOD,
         damping_coeff=DAMPING_COEFFICIENT,
-        random_placement=RANDOM_PLACEMENT,
-        random_chance=RANDOM_CHANCE,
-        monomer_info=MONOMER_INFO
+        random_placement=random_placement,
+        random_chance=random_chance,
+        monomer_info=MONOMER_INFO,
+        batch_mode=batch_mode
     )
 
-    visualizer = SimulationVisualizer(sim, scaling=SCALING, plot_outer_layer=PLOT_OUTER_LAYER)
+    if not args.batch_mode:
+        visualizer = SimulationVisualizer(sim, scaling=SCALING, plot_outer_layer=PLOT_OUTER_LAYER)
+    else:
+        visualizer = None  # No visualizer in batch mode
 
-    n_steps = 10000000
+
+    n_steps = args.n_steps
     add_unit_every = 500
-    save_every = 250
-    plot_every = 250
+    save_every = args.save_every
+    plot_every = args.plot_every
 
     try:
         run_simulation(sim, visualizer, n_steps, add_unit_every, save_every, plot_every, 'simulation')
     except Exception as e:
         print(f"An error occurred: {e}")
         traceback.print_exc()
-
 
     # Load and continue simulation if needed
     '''
