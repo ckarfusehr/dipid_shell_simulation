@@ -943,24 +943,25 @@ def run_simulation(sim, visualizer, n_steps, add_unit_every, save_every, plot_ev
 
         
 
-def get_sim_params_from_dipid(r_dipid, h_dipid, alpha_sticky_deg, l_sticky, printout=True):
+def get_sim_params_from_dipid(r, h, alpha_sticky_deg, printout=True):
     angle_sticky_rad = np.radians(alpha_sticky_deg)
     
-    r_container = (r_dipid+3.96)/angle_sticky_rad
-    a_eq = 2*(np.sin(angle_sticky_rad)*(r_container+0.5*h_dipid)) #2*(l_sticky + r_dipid*np.cos(angle_sticky_rad)) - h_dipid*np.cos(np.pi/2-angle_sticky_rad)
-    delta_eq = l_sticky #/2 #(h_dipid/2)*np.cos(np.pi/2 - angle_sticky_rad) # nm 
+    l_T = h*np.cos(np.pi/2 - angle_sticky_rad)
     
-    a_eq_sim = a_eq/a_eq
-    delta_eq_sim = delta_eq/a_eq
-    #delta_eq_sim
+    a_0 = r*np.cos(angle_sticky_rad) + 2*l_T
+    r_container = a_0/(2*np.sin(angle_sticky_rad))
+    a_2 = 2*(r_container - h)*np.sin(angle_sticky_rad)
+    a_eq = (a_0 + a_2)/2
+    delta_eq = (a_0 - a_2)/4
     
     scaling = a_eq
+    a_eq_sim = a_eq/scaling
+    delta_eq_sim = delta_eq/scaling
     
     if printout:
-        print(f'Used DIPID parameters are:')
-        print(f'Radius DIPID r_dipid={r_dipid}nm')
-        print(f'Height DIPID: h_dipid={h_dipid}nm')
-        print(f'Length max. sticky connector: l_sticky={l_sticky}nm')
+        print(f'Used parameters are:')
+        print(f'Radius r={r}nm')
+        print(f'Height h={h}nm')
         print(f'Half binding angle: alpha_sticky_deg={alpha_sticky_deg}°')
         print()
         print(f'Simulation equilibrium length: a_eq_sim={a_eq_sim}')
@@ -998,23 +999,23 @@ if __name__ == '__main__':
     random_chance = args.random_chance
 
     # DIPID PARAMETERS
-    r_dipid = 14.25 #nm
-    h_dipid = 18 #nm
-    alpha_sticky_deg = args.alpha_sticky_deg
-    l_sticky = np.tan(np.radians(alpha_sticky_deg))* h_dipid #nm 
+    r = 14.25 #nm
+    h = 18 #nm
+    alpha_deg = args.alpha_sticky_deg
+    #l_sticky = np.tan(np.radians(alpha_sticky_deg))* h_dipid #nm 
 
     # RUN FLAVOUR
     batch_mode = args.batch_mode
 
     # DYNAMIC PARAMETERS
-    A0, DELTA, SCALING = get_sim_params_from_dipid(r_dipid, h_dipid, alpha_sticky_deg, l_sticky)
+    A0, DELTA, SCALING = get_sim_params_from_dipid(r, h, alpha_deg, False)
 
+    
     # Packing DIPID info and passing to Simulation class to use later in analysis
     MONOMER_INFO = {
-        'radius': r_dipid,
-        'height': h_dipid,
-        'alpha_binding': alpha_sticky_deg,
-        'length_sticky': l_sticky,
+        'radius': r,
+        'height': h,
+        'alpha_binding': alpha_deg,
         'scaling': SCALING
     }
 
@@ -1051,7 +1052,7 @@ if __name__ == '__main__':
         traceback.print_exc()
 
     # Load and continue simulation if needed
-    '''
+    
     try:
         filename = './20241119134515_sim_langevin_dt0.01_delta0.18_km0.1_TC20_damping0.1_cont1.pkl'
         newsim = MolecularDynamicsSimulation.load_state(filename, 'cont1', start_at=-20)
@@ -1060,4 +1061,4 @@ if __name__ == '__main__':
     except Exception as e:
         print(f"An error occurred: {e}")
         traceback.print_exc()
-    '''
+    
