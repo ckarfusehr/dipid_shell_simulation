@@ -948,7 +948,7 @@ def get_sim_params_from_dipid(r, h, alpha_sticky_deg, printout=True):
     
     l_T = h*np.cos(np.pi/2 - angle_sticky_rad)
     
-    a_0 = 2*r*np.cos(angle_sticky_rad) + 2*l_T
+    a_0 = 2*(r*np.cos(angle_sticky_rad) + l_T)
     r_container = a_0/(2*np.sin(angle_sticky_rad))
     a_2 = 2*(r_container - h)*np.sin(angle_sticky_rad)
     a_eq = (a_0 + a_2)/2
@@ -1052,7 +1052,7 @@ if __name__ == '__main__':
         traceback.print_exc()
 
     # Load and continue simulation if needed
-    
+    '''
     try:
         filename = './20241119134515_sim_langevin_dt0.01_delta0.18_km0.1_TC20_damping0.1_cont1.pkl'
         newsim = MolecularDynamicsSimulation.load_state(filename, 'cont1', start_at=-20)
@@ -1061,4 +1061,4 @@ if __name__ == '__main__':
     except Exception as e:
         print(f"An error occurred: {e}")
         traceback.print_exc()
-    
+    '''
