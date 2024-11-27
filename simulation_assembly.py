@@ -948,7 +948,7 @@ def get_sim_params_from_dipid(r, h, alpha_sticky_deg, printout=True):
     
     l_T = h*np.cos(np.pi/2 - angle_sticky_rad)
     
-    a_0 = r*np.cos(angle_sticky_rad) + 2*l_T
+    a_0 = 2*r*np.cos(angle_sticky_rad) + 2*l_T
     r_container = a_0/(2*np.sin(angle_sticky_rad))
     a_2 = 2*(r_container - h)*np.sin(angle_sticky_rad)
     a_eq = (a_0 + a_2)/2
