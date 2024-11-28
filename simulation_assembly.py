@@ -20,7 +20,8 @@ from scipy.spatial import KDTree
 np.seterr(divide='raise', over='raise', under='raise', invalid='raise')
 
 class MolecularDynamicsSimulation:
-    def __init__(self, dt, mass, lengthEq, delta, km, T_C=20, origin=np.zeros(3), method='verlet', damping_coeff=1, random_placement = False, random_chance = 0, monomer_info=None, batch_mode=False):
+    def __init__(self, dt, mass, lengthEq, delta, km, interlayer_distance=None, T_C=20, origin=np.zeros(3), method='langevin', damping_coeff=1, random_placement = False, random_chance = 0, monomer_info=None, batch_mode=False):
+        #Filename generation
         str_datetime = datetime.now().strftime("%Y%m%d%H%M%S")
         filename = './simulations/' + str_datetime + '_sim_' + method + "_dt" + str(dt) + "_delta" + str(delta) + "_km" + str(km)+'_TC' + str(T_C)
         if method == 'langevin':
@@ -31,38 +32,48 @@ class MolecularDynamicsSimulation:
         filename += '.pkl'
         self.filename = filename
 
+        #State memory
         self.state_trajectory = []
         self.sim_trajectory = []
 
+        #Simulation parameters
+        self.method = method
         self.dt = np.float64(dt)
+        self.T_C = T_C
+        self.T_K = T_C + 273.15
+        
+        self.damping_coeff = damping_coeff
+        
+        #Particle characteristics
+        if interlayer_distance is None:
+            self.interlayer_distance = lengthEq
+        else:
+            self.interlayer_distance = interlayer_distance
+        
         self.mass = np.float64(mass)
-
+        
+        self.lengthEq = np.float64(lengthEq)
+        self.delta = np.float64(delta)
+        
+        #spring_scaling = self.interlayer_distance / self.lengthEq
         self.k1 = np.float64(km)
         self.k2 = np.float64(km / 2)
         self.k3 = np.float64(km / 3)
+        #self.k2 = np.float64(km / 2)*spring_scaling
+        #self.k3 = np.float64(km / 3)*spring_scaling
 
-        self.lengthEq = np.float64(lengthEq)
-        self.delta = np.float64(delta)
-
-        self.T_C = T_C
-        self.T_K = T_C + 273.15
-
-        self.origin = origin
-
-        self.method = method
-        self.damping_coeff = damping_coeff
-
+        #Random placement characteristics (if activated)
         self.random_placement = random_placement
         self.random_chance = random_chance
         
         self.monomer_info = monomer_info
-
-        self.topology = nx.Graph()
-        
         self.batch_mode = batch_mode
 
+        self.initParticles(interlayer_distance, origin)
+        
+    def initParticles(self, interlayer_distance, origin):
         # Holds the initial 9 particles constituting the first unit cell (a triangular prism)
-        initial_positions = self.create_monomer()
+        initial_positions = self.create_monomer(interlayer_distance, origin)
 
         # Map node IDs to indices
         self.node_ids = []
@@ -75,6 +86,9 @@ class MolecularDynamicsSimulation:
         self.velocities = np.zeros((0, 3, 3), dtype=np.float64)
         self.accelerations = np.zeros((0, 3, 3), dtype=np.float64)
         self.positions_old = np.zeros((0, 3, 3), dtype=np.float64)
+
+        # Create initial topology
+        self.topology = nx.Graph()
 
         # Add initial particles
         for idx, pos_layers in enumerate(initial_positions):
@@ -99,21 +113,22 @@ class MolecularDynamicsSimulation:
             self.boundary_edges.add(tuple(sorted(edge)))
 
     # Helper functions
-    def create_monomer(self):
+    def create_monomer(self, interlayer_distance, origin=np.zeros(3)):
         l1 = self.lengthEq + 2 * self.delta
         l2 = self.lengthEq
         l3 = self.lengthEq - 2 * self.delta
 
-        ori_X = self.origin[0]
-        ori_Y = self.origin[1]
-        ori_Z = self.origin[2]
+        ori_X = origin[0]
+        ori_Y = origin[1]
+        ori_Z = origin[2]
 
         h1 = l1 * math.sqrt(3) / 2
         h2 = l2 * math.sqrt(3) / 2
         h3 = l3 * math.sqrt(3) / 2
 
-        u = np.linalg.norm(np.array([l1 / 2 - l2 / 2, h1 / 3 - h2 / 3], dtype=np.float64))
-        dz = math.sqrt(self.lengthEq ** 2 - u ** 2)
+        u = np.linalg.norm(np.array([(l1 - l2)/2, (h1 - h2)/3], dtype=np.float64))
+        dz = math.sqrt(interlayer_distance**2 - u**2)
+        print(f'dz = {dz*39.07268815885267}')
 
         # Positions for each layer
         # Layer 0 (Top)
@@ -205,8 +220,8 @@ class MolecularDynamicsSimulation:
         pos_low = self.positions[:, 2, :]
 
         # Self-interactions (forces between layers within the same node)
-        forces_top_mid_self = self.calc_force_batch(pos_top, pos_mid, self.k2, self.lengthEq)
-        forces_mid_low_self = self.calc_force_batch(pos_mid, pos_low, self.k2, self.lengthEq)
+        forces_top_mid_self = self.calc_force_batch(pos_top, pos_mid, self.k2, self.interlayer_distance)
+        forces_mid_low_self = self.calc_force_batch(pos_mid, pos_low, self.k2, self.interlayer_distance)
 
         # Update accelerations for self-interactions
         self.accelerations[:, 0, :] += forces_top_mid_self / self.mass
@@ -231,22 +246,15 @@ class MolecularDynamicsSimulation:
         pos_neigh_layers = self.positions[neighbor_indices, :, :]
 
         # Same-layer forces (k1 interactions)
-        force_top = self.calc_force_batch(pos_node_layers[:, 0, :], pos_neigh_layers[:, 0, :],
-                                          self.k1, self.lengthEq + 2 * self.delta)
-        force_mid = self.calc_force_batch(pos_node_layers[:, 1, :], pos_neigh_layers[:, 1, :],
-                                          self.k1, self.lengthEq)
-        force_low = self.calc_force_batch(pos_node_layers[:, 2, :], pos_neigh_layers[:, 2, :],
-                                          self.k1, self.lengthEq - 2 * self.delta)
+        force_top = self.calc_force_batch(pos_node_layers[:, 0, :], pos_neigh_layers[:, 0, :], self.k1, self.lengthEq + 2 * self.delta)
+        force_mid = self.calc_force_batch(pos_node_layers[:, 1, :], pos_neigh_layers[:, 1, :], self.k1, self.lengthEq)
+        force_low = self.calc_force_batch(pos_node_layers[:, 2, :], pos_neigh_layers[:, 2, :], self.k1, self.lengthEq - 2 * self.delta)
 
         # Cross-layer forces (k3 interactions)
-        force_top_mid = self.calc_force_batch(pos_node_layers[:, 0, :], pos_neigh_layers[:, 1, :],
-                                              self.k3, self.a12)
-        force_mid_top = self.calc_force_batch(pos_node_layers[:, 1, :], pos_neigh_layers[:, 0, :],
-                                              self.k3, self.a12)
-        force_mid_low = self.calc_force_batch(pos_node_layers[:, 1, :], pos_neigh_layers[:, 2, :],
-                                              self.k3, self.a23)
-        force_low_mid = self.calc_force_batch(pos_node_layers[:, 2, :], pos_neigh_layers[:, 1, :],
-                                              self.k3, self.a23)
+        force_top_mid = self.calc_force_batch(pos_node_layers[:, 0, :], pos_neigh_layers[:, 1, :], self.k3, self.a12)
+        force_mid_top = self.calc_force_batch(pos_node_layers[:, 1, :], pos_neigh_layers[:, 0, :], self.k3, self.a12)
+        force_mid_low = self.calc_force_batch(pos_node_layers[:, 1, :], pos_neigh_layers[:, 2, :], self.k3, self.a23)
+        force_low_mid = self.calc_force_batch(pos_node_layers[:, 2, :], pos_neigh_layers[:, 1, :], self.k3, self.a23)
 
         # Update accelerations using np.add.at to handle multiple contributions
         # Same-layer interactions
@@ -685,7 +693,7 @@ class MolecularDynamicsSimulation:
         filename_trajectory = ''.join(str(self.filename).split('.')[0:-1]) + '_trajectory.pkl'
 
         # Only pickle self
-        with open(filename_trajectory, 'wb') as f:
+        with open(cd / filename_trajectory, 'wb') as f:
             pickle.dump(self.state_trajectory, f)
 
     @classmethod
@@ -940,23 +948,24 @@ def run_simulation(sim, visualizer, n_steps, add_unit_every, save_every, plot_ev
         plt.ioff()
         plt.show()
 
-
-        
-
 def get_sim_params_from_dipid(r, h, alpha_sticky_deg, printout=True):
     angle_sticky_rad = np.radians(alpha_sticky_deg)
     
-    l_T = h*np.cos(np.pi/2 - angle_sticky_rad)
+    l_T = h*np.cos(np.pi/2 - angle_sticky_rad) + 3.94
     
     a_0 = 2*(r*np.cos(angle_sticky_rad) + l_T)
     r_container = a_0/(2*np.sin(angle_sticky_rad))
     a_2 = 2*(r_container - h)*np.sin(angle_sticky_rad)
+    
     a_eq = (a_0 + a_2)/2
     delta_eq = (a_0 - a_2)/4
+    interlayer_distance = h/2
     
     scaling = a_eq
+    
     a_eq_sim = a_eq/scaling
     delta_eq_sim = delta_eq/scaling
+    interlayer_distance_sim = interlayer_distance/scaling
     
     if printout:
         print(f'Used parameters are:')
@@ -966,9 +975,10 @@ def get_sim_params_from_dipid(r, h, alpha_sticky_deg, printout=True):
         print()
         print(f'Simulation equilibrium length: a_eq_sim={a_eq_sim}')
         print(f'Simulation equilibrium asymmetry: delta_eq_sim={delta_eq_sim}')
+        print(f'Interlayer distance: interlayer_distance_sim={interlayer_distance_sim}')
         print(f'Scaling factor sim_units -> physical_units: scaling={scaling}')
     
-    return a_eq_sim, delta_eq_sim, scaling
+    return a_eq_sim, delta_eq_sim, interlayer_distance_sim, scaling
 
 if __name__ == '__main__':
     # Parse command-line arguments
@@ -988,7 +998,7 @@ if __name__ == '__main__':
     # FIXED PARAMETERS
     MASS = 1
     T_C = 20
-    PLOT_OUTER_LAYER = True
+    PLOT_OUTER_LAYER = False
     DT = 0.01
     METHOD = 'langevin'
     DAMPING_COEFFICIENT = 0.1
@@ -1007,8 +1017,9 @@ if __name__ == '__main__':
     # RUN FLAVOUR
     batch_mode = args.batch_mode
 
+    alpha_deg = 10
     # DYNAMIC PARAMETERS
-    A0, DELTA, SCALING = get_sim_params_from_dipid(r, h, alpha_deg, False)
+    A0, DELTA, INTERLAYER_DISTANCE, SCALING = get_sim_params_from_dipid(r, h, alpha_deg, True)
 
     
     # Packing DIPID info and passing to Simulation class to use later in analysis
@@ -1025,6 +1036,7 @@ if __name__ == '__main__':
         lengthEq=A0,
         delta=DELTA,
         km=KM,
+        interlayer_distance=INTERLAYER_DISTANCE,
         T_C=T_C,
         method=METHOD,
         damping_coeff=DAMPING_COEFFICIENT,
@@ -1044,6 +1056,7 @@ if __name__ == '__main__':
     add_unit_every = 500
     save_every = args.save_every
     plot_every = args.plot_every
+    #plot_every = 100
 
     try:
         run_simulation(sim, visualizer, n_steps, add_unit_every, save_every, plot_every, 'simulation')
