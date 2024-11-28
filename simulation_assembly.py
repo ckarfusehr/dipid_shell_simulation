@@ -1017,7 +1017,7 @@ if __name__ == '__main__':
     # RUN FLAVOUR
     batch_mode = args.batch_mode
 
-    alpha_deg = 10
+    #alpha_deg = 10
     # DYNAMIC PARAMETERS
     A0, DELTA, INTERLAYER_DISTANCE, SCALING = get_sim_params_from_dipid(r, h, alpha_deg, True)
 
@@ -1056,7 +1056,6 @@ if __name__ == '__main__':
     add_unit_every = 500
     save_every = args.save_every
     plot_every = args.plot_every
-    #plot_every = 100
 
     try:
         run_simulation(sim, visualizer, n_steps, add_unit_every, save_every, plot_every, 'simulation')
