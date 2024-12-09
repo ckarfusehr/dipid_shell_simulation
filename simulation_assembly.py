@@ -1054,21 +1054,16 @@ if __name__ == '__main__':
     random_chance = args.random_chance
 
     # DIPID PARAMETERS
-    #r = 14.25 #nm
-    #h = 18 #nm
-    #alpha_deg = args.alpha_sticky_deg
-    #l_sticky = np.tan(np.radians(alpha_sticky_deg))* h_dipid #nm 
-
     r = 14.25 #nm
     h = 18 #nm
-    alpha_deg = 13
+    alpha_deg = args.alpha_sticky_deg
+    #l_sticky = np.tan(np.radians(alpha_sticky_deg))* h_dipid #nm 
 
     # RUN FLAVOUR
     batch_mode = args.batch_mode
 
     # DYNAMIC PARAMETERS
     A0, DELTA, INTERLAYER_DISTANCE, SCALING = get_sim_params_from_dipid(r, h, alpha_deg, True)
-    print(f'DELTA = {DELTA}')
     
     # Packing DIPID info and passing to Simulation class to use later in analysis
     MONOMER_INFO = {
@@ -1078,8 +1073,6 @@ if __name__ == '__main__':
         'scaling': SCALING
     }
 
-
-    '''
     sim = MolecularDynamicsSimulation(
         dt=DT,
         mass=MASS,
@@ -1096,35 +1089,16 @@ if __name__ == '__main__':
         batch_mode=batch_mode
     )
     
-    '''
-    sim = MolecularDynamicsSimulation(
-        dt=0.01,
-        mass=1,
-        lengthEq=A0,
-        delta=DELTA,
-        km=1,
-        interlayer_distance=INTERLAYER_DISTANCE,
-        T_C=20,
-        method='langevin',
-        damping_coeff=0.1,
-        random_placement=True,
-        random_chance=0.0,
-        monomer_info=MONOMER_INFO,
-        batch_mode=False
-    )
-    
     if not args.batch_mode:
         visualizer = SimulationVisualizer(sim, scaling=SCALING, plot_outer_layer=PLOT_OUTER_LAYER)
     else:
         visualizer = None  # No visualizer in batch mode
 
-
     n_steps = args.n_steps
-    add_unit_every = 500
+    add_unit_every = 1000
     save_every = args.save_every
     plot_every = args.plot_every
 
-    
     try:
         run_simulation(sim, visualizer, n_steps, add_unit_every, save_every, plot_every, 'simulation')
     except Exception as e:
