@@ -5,7 +5,6 @@ import traceback
 import pickle
 import copy
 from pathlib import Path
-import cProfile
 from datetime import datetime
 import random
 import argparse
@@ -13,13 +12,13 @@ import argparse
 import matplotlib.pyplot as plt
 
 import networkx as nx
-import graphblas as gb
-from graphblas.semiring import plus_pair
+from collections import Counter
 from scipy.spatial import KDTree
 
 np.seterr(divide='raise', over='raise', under='raise', invalid='raise')
 
 class MolecularDynamicsSimulation:
+    # Initializations
     def __init__(self, dt, mass, lengthEq, delta, km, interlayer_distance=None, T_C=20, origin=np.zeros(3), method='langevin', damping_coeff=1, random_placement = False, random_chance = 0, monomer_info=None, batch_mode=False):
         #Filename generation
         str_datetime = datetime.now().strftime("%Y%m%d%H%M%S")
@@ -55,12 +54,9 @@ class MolecularDynamicsSimulation:
         self.lengthEq = np.float64(lengthEq)
         self.delta = np.float64(delta)
         
-        #spring_scaling = self.interlayer_distance / self.lengthEq
         self.k1 = np.float64(km)
         self.k2 = np.float64(km / 2)
         self.k3 = np.float64(km / 3)
-        #self.k2 = np.float64(km / 2)*spring_scaling
-        #self.k3 = np.float64(km / 3)*spring_scaling
 
         #Random placement characteristics (if activated)
         self.random_placement = random_placement
@@ -69,51 +65,69 @@ class MolecularDynamicsSimulation:
         self.monomer_info = monomer_info
         self.batch_mode = batch_mode
 
-        self.initParticles(interlayer_distance, origin)
+
+        # Create initial topology
+        self.topology = nx.Graph()
+        self.top_boundaries = []
         
-    def initParticles(self, interlayer_distance, origin):
-        # Holds the initial 9 particles constituting the first unit cell (a triangular prism)
-        initial_positions = self.create_monomer(interlayer_distance, origin)
-
-        # Map node IDs to indices
-        self.node_ids = []
-        self.node_id_map = {}
-        self.N_nodes = 0  # Will be updated as we add nodes
-
         # Initialize positions, velocities, accelerations, positions_old arrays
         # Shape: (N_nodes, 3_layers, 3)
         self.positions = np.zeros((0, 3, 3), dtype=np.float64)
         self.velocities = np.zeros((0, 3, 3), dtype=np.float64)
         self.accelerations = np.zeros((0, 3, 3), dtype=np.float64)
         self.positions_old = np.zeros((0, 3, 3), dtype=np.float64)
+        
+        # Map node IDs to indices
+        self.map_node_config = {}
+        self.node_counter = 0
 
-        # Create initial topology
-        self.topology = nx.Graph()
-
-        # Add initial particles
-        for idx, pos_layers in enumerate(initial_positions):
-            node_id = idx  # Assuming initial node IDs start from 0
-            self.add_particle(node_id, pos_layers)
-
+        self.init_assembly_top_conf(interlayer_distance, origin)
         self.fix_velocity_distribution()
-
+        
         # Empirically determine the equilibrium cross-layer distance
         # Distance between layer 1 and 2 -> a12
         # Distance between layer 2 and 3 -> a23
         self.a12 = np.linalg.norm(self.positions[0, 0, :] - self.positions[1, 1, :])
         self.a23 = np.linalg.norm(self.positions[0, 1, :] - self.positions[1, 2, :])
+        
+    def init_assembly_top_conf(self, interlayer_distance, origin):
+        # Holds the initial 9 particles constituting the first unit cell (a triangular prism)
+        positions = self.create_prims(interlayer_distance, origin)
+
+        # Add initial particles
+        for pos_layers in positions:
+            self.add_particle(pos_layers)
 
         # Generate a complete topological graph from initial configuration
-        complete_graph = nx.complete_graph(self.topology.nodes())
-        self.topology.add_edges_from(complete_graph.edges())
+        topology_init = nx.complete_graph(self.topology.nodes())
+        self.topology.add_edges_from(topology_init.edges())
+        self.top_boundaries.append(set(self.topology.edges()))
+        
+    def init_vel_boltzmann(self, num_particles):
+        sigma = np.sqrt(1.38e-23 * self.T_K / self.mass)
+        vel = np.random.normal(0, sigma, (num_particles, 3)).astype(np.float64)
+        return vel
 
-        # Initialize boundary edges
-        self.boundary_edges = set()
-        for edge in self.topology.edges():
-            self.boundary_edges.add(tuple(sorted(edge)))
+    def fix_velocity_distribution(self):
+        k_B = 1.38e-23
+        N = self.topology.number_of_nodes() * 3  # Total number of particles (nodes * layers)
 
-    # Helper functions
-    def create_monomer(self, interlayer_distance, origin=np.zeros(3)):
+        v_total = np.sum(self.velocities)
+        v_mean = v_total / N
+        v_total -= v_mean
+
+        # Step 4: Calculate the total squared velocity
+        v_square_total = np.sum(self.velocities ** 2)
+        v_square_mean = v_square_total / N
+
+        # Step 6: Calculate the current kinetic energy and the desired kinetic energy
+        kinetic_energy_per_particle = 0.5 * self.mass * v_square_mean
+        desired_kinetic_energy = 1.5 * k_B * self.T_K
+        scaling_factor = np.sqrt(desired_kinetic_energy / kinetic_energy_per_particle)
+
+        self.velocities *= scaling_factor
+
+    def create_prims(self, interlayer_distance, origin=np.zeros(3)):
         l1 = self.lengthEq + 2 * self.delta
         l2 = self.lengthEq
         l3 = self.lengthEq - 2 * self.delta
@@ -128,7 +142,6 @@ class MolecularDynamicsSimulation:
 
         u = np.linalg.norm(np.array([(l1 - l2)/2, (h1 - h2)/3], dtype=np.float64))
         dz = math.sqrt(interlayer_distance**2 - u**2)
-        print(f'dz = {dz*39.07268815885267}')
 
         # Positions for each layer
         # Layer 0 (Top)
@@ -160,20 +173,94 @@ class MolecularDynamicsSimulation:
 
         return positions
 
-    def mirror_point(self, A, B, C):
+
+    # Particle handler
+    def add_particle(self, positions):
+        # Add a new particle with given positions for each layer
+        self.topology.add_node(self.node_counter)
+        
+        # Expand arrays to accommodate the new node
+        self.positions = np.vstack((self.positions, [positions]))
+        self.velocities = np.vstack((self.velocities, [self.init_vel_boltzmann(3)]))
+        self.accelerations = np.vstack((self.accelerations, np.zeros((1, 3, 3), dtype=np.float64)))
+        self.positions_old = np.vstack((self.positions_old, [positions - self.velocities[-1] * self.dt]))
+        
+        new_node_id = self.node_counter
+        self.map_node_config[new_node_id] = self.topology.number_of_nodes()-1
+        self.node_counter += 1
+        
+        return new_node_id 
+
+    def remove_particle(self, node):
+        self.topology.remove_node(node)        
+        self.map_node_config[node] = None
+        
+    def place_particle(self, edgeStart, edgeEnd):
+        com_neighbours = list(nx.common_neighbors(self.topology, edgeStart, edgeEnd))
+        if not com_neighbours:
+            print("No common neighbor found.")
+            return
+        elif len(com_neighbours) >= 2:
+            print(f"Trying to add a particle to an inner edge instead of a boundary edge! Common neighbours = {len(com_neighbours)}.")
+        
+        ref_node = com_neighbours[0]
+        ref_node_idx = self.map_node_config[ref_node]
+        node_1_idx = self.map_node_config[edgeStart]
+        node_2_idx = self.map_node_config[edgeEnd]
+
+        pos_ref = self.positions[ref_node_idx, :, :] 
+        pos_node_1 = self.positions[node_1_idx, :, :]
+        pos_node_2 = self.positions[node_2_idx, :, :]
+
+        pos_new_layers = np.zeros((3, 3), dtype=np.float64)
+        for i in range(3):
+            pos_ref_coords = pos_ref[i, :]
+            pos_base1_coords = pos_node_1[i, :]
+            pos_base2_coords = pos_node_2[i, :]
+
+            coords = self.position_from_reference(pos_ref_coords, pos_base1_coords, pos_base2_coords)
+            pos_new_layers[i, :] = coords
+
+        new_node = self.add_particle(pos_new_layers)
+        self.fix_velocity_distribution()
+
+        self.topology.add_node(new_node)
+        self.topology.add_edge(new_node, edgeStart)
+        self.topology.add_edge(new_node, edgeEnd)
+        
+        return new_node
+        
+    def position_from_reference(self, p_ref, p_base1, p_base2):
         # Mirror point B across the line AC
-        AC = C - A
-        AB = B - A
-        AC_norm = AC / np.linalg.norm(AC)
-        projection_length = np.dot(AB, AC_norm)
-        projection_point = A + projection_length * AC_norm
-        mirrored_B = 2 * projection_point - B
-        return mirrored_B
+        v_base = p_base2 - p_base1
+        v_ref = p_ref - p_base1
+        v_base_norm = v_base / np.linalg.norm(v_base)
+        proj_length = np.dot(v_ref, v_base_norm)
+        proj_point = p_base1 + proj_length * v_base_norm
+        
+        new_point = 2 * proj_point - p_ref
+        
+        return new_point
+
+    def getParticleCount(self):
+        return self.topology.number_of_nodes()
+
+    def getNodeStatistics(self):
+        if self.topology.is_directed():
+            raise TypeError("The function expects an undirected graph. Please provide an undirected NetworkX graph.")
+    
+        # Extract degrees of all nodes
+        degrees = [degree for _, degree in self.topology.degree()]        
+        degree_counts = Counter(degrees)
+        degree_distribution = dict(sorted(degree_counts.items()))
+        
+        return degree_distribution
+    
 
     def calc_angle(self, node_id, neighbour1_id, neighbour2_id):
-        pos_node = self.positions[self.node_id_map[node_id], 0, :]
-        pos_neighbour1 = self.positions[self.node_id_map[neighbour1_id], 0, :]
-        pos_neighbour2 = self.positions[self.node_id_map[neighbour2_id], 0, :]
+        pos_node = self.positions[self.map_node_config[node_id], 0, :]
+        pos_neighbour1 = self.positions[self.map_node_config[neighbour1_id], 0, :]
+        pos_neighbour2 = self.positions[self.map_node_config[neighbour2_id], 0, :]
 
         v1 = pos_neighbour1 - pos_node
         v2 = pos_neighbour2 - pos_node
@@ -201,89 +288,7 @@ class MolecularDynamicsSimulation:
 
         v_f = -k * (l - a0)[:, np.newaxis] * v_r12_norm  # Shape: (N, 3)
         return v_f
-
-    # Getters
-    def getParticleCount(self):
-        return self.topology.number_of_nodes()
-
-    # Check if there is still a boundary in the assembly -> if not, the surface must be closed
-    def is_closed_surface(self):
-        return len(self.boundary_edges) <= 3 and self.getParticleCount() > 3
-
-    def update_accelerations(self):
-        # Reset accelerations
-        self.accelerations.fill(0)  # Shape: (N_nodes, 3, 3)
-
-        # Extract positions for each layer
-        pos_top = self.positions[:, 0, :]  # Shape: (N_nodes, 3)
-        pos_mid = self.positions[:, 1, :]
-        pos_low = self.positions[:, 2, :]
-
-        # Self-interactions (forces between layers within the same node)
-        forces_top_mid_self = self.calc_force_batch(pos_top, pos_mid, self.k2, self.interlayer_distance)
-        forces_mid_low_self = self.calc_force_batch(pos_mid, pos_low, self.k2, self.interlayer_distance)
-
-        # Update accelerations for self-interactions
-        self.accelerations[:, 0, :] += forces_top_mid_self / self.mass
-        self.accelerations[:, 1, :] += (-forces_top_mid_self + forces_mid_low_self) / self.mass
-        self.accelerations[:, 2, :] += -forces_mid_low_self / self.mass
-
-        # Build interaction lists for neighbor interactions
-        node_indices = []
-        neighbor_indices = []
-
-        for edge in self.topology.edges():
-            node_id = edge[0]
-            neighbour_id = edge[1]
-            node_indices.append(self.node_id_map[node_id])
-            neighbor_indices.append(self.node_id_map[neighbour_id])
-
-        node_indices = np.array(node_indices)
-        neighbor_indices = np.array(neighbor_indices)
-
-        # Positions of interacting pairs
-        pos_node_layers = self.positions[node_indices, :, :]  # Shape: (N_pairs, 3, 3)
-        pos_neigh_layers = self.positions[neighbor_indices, :, :]
-
-        # Same-layer forces (k1 interactions)
-        force_top = self.calc_force_batch(pos_node_layers[:, 0, :], pos_neigh_layers[:, 0, :], self.k1, self.lengthEq + 2 * self.delta)
-        force_mid = self.calc_force_batch(pos_node_layers[:, 1, :], pos_neigh_layers[:, 1, :], self.k1, self.lengthEq)
-        force_low = self.calc_force_batch(pos_node_layers[:, 2, :], pos_neigh_layers[:, 2, :], self.k1, self.lengthEq - 2 * self.delta)
-
-        # Cross-layer forces (k3 interactions)
-        force_top_mid = self.calc_force_batch(pos_node_layers[:, 0, :], pos_neigh_layers[:, 1, :], self.k3, self.a12)
-        force_mid_top = self.calc_force_batch(pos_node_layers[:, 1, :], pos_neigh_layers[:, 0, :], self.k3, self.a12)
-        force_mid_low = self.calc_force_batch(pos_node_layers[:, 1, :], pos_neigh_layers[:, 2, :], self.k3, self.a23)
-        force_low_mid = self.calc_force_batch(pos_node_layers[:, 2, :], pos_neigh_layers[:, 1, :], self.k3, self.a23)
-
-        # Update accelerations using np.add.at to handle multiple contributions
-        # Same-layer interactions
-        np.add.at(self.accelerations, (node_indices, 0, slice(None)), force_top / self.mass)
-        np.add.at(self.accelerations, (neighbor_indices, 0, slice(None)), -force_top / self.mass)
-
-        np.add.at(self.accelerations, (node_indices, 1, slice(None)), force_mid / self.mass)
-        np.add.at(self.accelerations, (neighbor_indices, 1, slice(None)), -force_mid / self.mass)
-
-        np.add.at(self.accelerations, (node_indices, 2, slice(None)), force_low / self.mass)
-        np.add.at(self.accelerations, (neighbor_indices, 2, slice(None)), -force_low / self.mass)
-
-        # Cross-layer interactions
-        # Top to mid
-        np.add.at(self.accelerations, (node_indices, 0, slice(None)), force_top_mid / self.mass)
-        np.add.at(self.accelerations, (neighbor_indices, 1, slice(None)), -force_top_mid / self.mass)
-
-        # Mid to top
-        np.add.at(self.accelerations, (node_indices, 1, slice(None)), force_mid_top / self.mass)
-        np.add.at(self.accelerations, (neighbor_indices, 0, slice(None)), -force_mid_top / self.mass)
-
-        # Mid to low
-        np.add.at(self.accelerations, (node_indices, 1, slice(None)), force_mid_low / self.mass)
-        np.add.at(self.accelerations, (neighbor_indices, 2, slice(None)), -force_mid_low / self.mass)
-
-        # Low to mid
-        np.add.at(self.accelerations, (node_indices, 2, slice(None)), force_low_mid / self.mass)
-        np.add.at(self.accelerations, (neighbor_indices, 1, slice(None)), -force_low_mid / self.mass)
-
+    
     def calcTotalEnergy(self):
         totalEnergy = 0
 
@@ -294,8 +299,8 @@ class MolecularDynamicsSimulation:
         for edge in self.topology.edges():
             node_id = edge[0]
             neighbour_id = edge[1]
-            node_indices.append(self.node_id_map[node_id])
-            neighbor_indices.append(self.node_id_map[neighbour_id])
+            node_indices.append(self.map_node_config[node_id])
+            neighbor_indices.append(self.map_node_config[neighbour_id])
 
         node_indices = np.array(node_indices)
         neighbor_indices = np.array(neighbor_indices)
@@ -337,98 +342,157 @@ class MolecularDynamicsSimulation:
 
         return totalEnergy
 
-    def close_pentamer(self, node_id, neighbour_1, neighbour_2):
-        if not self.batch_mode:
-            print("CLOSE AS PENTAMER")
 
+    # Check if there is still a boundary in the assembly -> if not, the surface must be closed
+    def is_closed_surface(self):
+        return sum(len(s) for s in self.top_boundaries) <= 3 and self.getParticleCount() > 3
+
+    def update_accelerations(self):
+        # Reset accelerations
+        self.accelerations.fill(0)  # Shape: (N_nodes, 3, 3)
+
+        # Extract positions for each layer
+        pos_top = self.positions[:, 0, :]  # Shape: (N_nodes, 3)
+        pos_mid = self.positions[:, 1, :]
+        pos_low = self.positions[:, 2, :]
+
+        # Self-interactions (forces between layers within the same node)
+        forces_top_mid_self = self.calc_force_batch(pos_top, pos_mid, self.k2, self.interlayer_distance)
+        forces_mid_low_self = self.calc_force_batch(pos_mid, pos_low, self.k2, self.interlayer_distance)
+
+        # Update accelerations for self-interactions
+        self.accelerations[:, 0, :] += forces_top_mid_self / self.mass
+        self.accelerations[:, 1, :] += (-forces_top_mid_self + forces_mid_low_self) / self.mass
+        self.accelerations[:, 2, :] += -forces_mid_low_self / self.mass
+
+        # Build interaction lists for neighbor interactions
+        node_indices = []
+        neighbor_indices = []
+
+        for edge in self.topology.edges():
+            node_id = edge[0]
+            neighbour_id = edge[1]
+            node_indices.append(self.map_node_config[node_id])
+            neighbor_indices.append(self.map_node_config[neighbour_id])
+
+        node_indices = np.array(node_indices)
+        neighbor_indices = np.array(neighbor_indices)
+
+        # Positions of interacting pairs
+        pos_node_layers = self.positions[node_indices, :, :]
+        pos_neigh_layers = self.positions[neighbor_indices, :, :]
+
+        # Same-layer forces (k1 interactions)
+        force_top = self.calc_force_batch(pos_node_layers[:, 0, :], pos_neigh_layers[:, 0, :], self.k1, self.lengthEq + 2 * self.delta)
+        force_mid = self.calc_force_batch(pos_node_layers[:, 1, :], pos_neigh_layers[:, 1, :], self.k1, self.lengthEq)
+        force_low = self.calc_force_batch(pos_node_layers[:, 2, :], pos_neigh_layers[:, 2, :], self.k1, self.lengthEq - 2 * self.delta)
+
+        # Cross-layer forces (k3 interactions)
+        force_top_mid = self.calc_force_batch(pos_node_layers[:, 0, :], pos_neigh_layers[:, 1, :], self.k3, self.a12)
+        force_mid_top = self.calc_force_batch(pos_node_layers[:, 1, :], pos_neigh_layers[:, 0, :], self.k3, self.a12)
+        force_mid_low = self.calc_force_batch(pos_node_layers[:, 1, :], pos_neigh_layers[:, 2, :], self.k3, self.a23)
+        force_low_mid = self.calc_force_batch(pos_node_layers[:, 2, :], pos_neigh_layers[:, 1, :], self.k3, self.a23)
+
+        # Update accelerations using np.add.at to handle multiple contributions
+        # Same-layer interactions
+        np.add.at(self.accelerations, (node_indices, 0, slice(None)), force_top / self.mass)
+        np.add.at(self.accelerations, (neighbor_indices, 0, slice(None)), -force_top / self.mass)
+
+        np.add.at(self.accelerations, (node_indices, 1, slice(None)), force_mid / self.mass)
+        np.add.at(self.accelerations, (neighbor_indices, 1, slice(None)), -force_mid / self.mass)
+
+        np.add.at(self.accelerations, (node_indices, 2, slice(None)), force_low / self.mass)
+        np.add.at(self.accelerations, (neighbor_indices, 2, slice(None)), -force_low / self.mass)
+
+        # Cross-layer interactions
+        # Top to mid
+        np.add.at(self.accelerations, (node_indices, 0, slice(None)), force_top_mid / self.mass)
+        np.add.at(self.accelerations, (neighbor_indices, 1, slice(None)), -force_top_mid / self.mass)
+
+        # Mid to top
+        np.add.at(self.accelerations, (node_indices, 1, slice(None)), force_mid_top / self.mass)
+        np.add.at(self.accelerations, (neighbor_indices, 0, slice(None)), -force_mid_top / self.mass)
+
+        # Mid to low
+        np.add.at(self.accelerations, (node_indices, 1, slice(None)), force_mid_low / self.mass)
+        np.add.at(self.accelerations, (neighbor_indices, 2, slice(None)), -force_mid_low / self.mass)
+
+        # Low to mid
+        np.add.at(self.accelerations, (node_indices, 2, slice(None)), force_low_mid / self.mass)
+        np.add.at(self.accelerations, (neighbor_indices, 1, slice(None)), -force_low_mid / self.mass)
+
+    def close_pentamer(self, node_id, neighbour_1, neighbour_2):
         # Remove the two edges connected to neighbour_2 from boundary_edges
         edge1 = tuple(sorted((node_id, neighbour_1)))
         edge2 = tuple(sorted((node_id, neighbour_2)))
-        self.boundary_edges.discard(edge1)
-        self.boundary_edges.discard(edge2)
+        
+        current_boundary = None
+        for distinct_boundary in self.top_boundaries:
+            if edge1 in distinct_boundary and edge2 in distinct_boundary:
+                current_boundary = distinct_boundary
+        
+        current_boundary.discard(edge1)
+        current_boundary.discard(edge2)
 
         # Remove boundary edges involving neighbour_2
-        edges_to_remove = {edge for edge in self.boundary_edges if neighbour_2 in edge}
-        self.boundary_edges -= edges_to_remove
+        edges_to_remove = {edge for edge in current_boundary if neighbour_2 in edge}
+        current_boundary -= edges_to_remove
 
         new_boundaries = {tuple(sorted((node, neighbour_1))) for edge in edges_to_remove for node in edge if node != neighbour_2}
-        self.boundary_edges.update(new_boundaries)
+        current_boundary.update(new_boundaries)
 
         # Add new edges and update boundary_edges
         for neighbour_id in list(self.topology.neighbors(neighbour_2)):
             self.topology.add_edge(neighbour_1, neighbour_id)
                 
         # Remove node and update data structures
-        self.topology.remove_node(neighbour_2)
-        idx_remove = self.node_id_map.pop(neighbour_2)
-        self.node_ids.remove(neighbour_2)
-        self.N_nodes -= 1
-        self.positions = np.delete(self.positions, idx_remove, axis=0)
-        self.velocities = np.delete(self.velocities, idx_remove, axis=0)
-        self.accelerations = np.delete(self.accelerations, idx_remove, axis=0)
-        self.positions_old = np.delete(self.positions_old, idx_remove, axis=0)
-
-        # Update node_id_map indices
-        for node_id, idx in self.node_id_map.items():
-            if idx > idx_remove:
-                self.node_id_map[node_id] = idx - 1
+        self.remove_particle(neighbour_2)
 
     def close_hexamer(self, min_entry):
-        if not self.batch_mode:
-            print("CLOSE AS HEXAMER")
-        
         # Close as Hexamer
         edge1 = tuple(sorted((min_entry['node_id'], min_entry['neighbour_1'])))
         edge2 = tuple(sorted((min_entry['node_id'], min_entry['neighbour_2'])))
-        self.boundary_edges.discard(edge1)
-        self.boundary_edges.discard(edge2)
+        
+        current_boundary = None
+        for distinct_boundary in self.top_boundaries:
+            if edge1 in distinct_boundary and edge2 in distinct_boundary:
+                current_boundary = distinct_boundary
+        
+        current_boundary.discard(edge1)
+        current_boundary.discard(edge2)
 
         # Add new edge and update boundary_edges
         self.topology.add_edge(min_entry['neighbour_1'], min_entry['neighbour_2'])
         new_edge = tuple(sorted((min_entry['neighbour_1'], min_entry['neighbour_2'])))
-        if new_edge in self.boundary_edges:
-            self.boundary_edges.discard(new_edge)
+        if new_edge in current_boundary:
+            current_boundary.discard(new_edge)
         else:
-            self.boundary_edges.add(new_edge)
-
-    def add_particle(self, node_id, pos_layers):
-        # Add a new particle with given positions for each layer
-        self.topology.add_node(node_id)
-        self.node_id_map[node_id] = self.N_nodes
-        self.node_ids.append(node_id)
-        self.N_nodes += 1
-
-        # Expand arrays to accommodate the new node
-        self.positions = np.vstack((self.positions, [pos_layers]))
-        self.velocities = np.vstack((self.velocities, [self.init_vel_boltzmann(3)]))
-        self.accelerations = np.vstack((self.accelerations, [np.zeros((3, 3), dtype=np.float64)]))
-        self.positions_old = np.vstack((self.positions_old, [pos_layers - self.velocities[-1] * self.dt]))
+            current_boundary.add(new_edge)
 
     def next_position(self):
         # Use boundary edges to find nodes at the boundary
         boundary_nodes = set()
-        for edge in self.boundary_edges:
-            boundary_nodes.update(edge)
-
-        # Remove any nodes that are no longer in the topology
-        boundary_nodes = {node for node in boundary_nodes if node in self.node_id_map}
-
+        for distinct_boundary in self.top_boundaries:
+            for edge in distinct_boundary:
+                boundary_nodes.add(edge[0])
+                boundary_nodes.add(edge[1])
        
         # Iterate through all nodes at the boundary and calculate the angle between edges
         growing_edge_positions = []
         for node in boundary_nodes:
             degree = self.topology.degree(node)
-            connected_edges = [edge for edge in self.boundary_edges if node in edge]
-            connected_ids = [edge[1] if edge[0] == node else edge[0] for edge in connected_edges]
-            
-            if len(connected_ids) < 2:
-                continue  # Skip nodes that don't have at least two boundary connections
-            
-            angle = self.calc_angle(node, connected_ids[0], connected_ids[1])
-            if degree == 2 or degree == 3:
-                angle = 360.00 - angle
+            for distinct_boundary in self.top_boundaries:
+                connected_edges = [edge for edge in distinct_boundary if node in edge]
+                connected_ids = [edge[1] if edge[0] == node else edge[0] for edge in connected_edges]
+                
+                if len(connected_ids) < 2:
+                    continue  # Skip nodes that don't have at least two boundary connections
+                
+                angle = self.calc_angle(node, connected_ids[0], connected_ids[1])
+                if degree == 2 or degree == 3:
+                    angle = 360.00 - angle
 
-            growing_edge_positions.append({'angle': round(angle,2), 'node_id': node, 'degree': degree, 'neighbour_1': connected_ids[0], 'neighbour_2': connected_ids[1]})
+                growing_edge_positions.append({'angle': round(angle,2), 'node_id': node, 'degree': degree, 'neighbour_1': connected_ids[0], 'neighbour_2': connected_ids[1]})
 
         if not growing_edge_positions:
             print("No valid positions to add particles.")
@@ -438,9 +502,7 @@ class MolecularDynamicsSimulation:
         best_candidate = None
         if self.random_placement and random.random() < self.random_chance:
             best_candidate = random.choice(list(growing_edge_positions))
-            if not self.batch_mode:
-                print(f'POSITION RANDOMLY CHOSEN (happens {self.random_chance*100}% of times)')
-        
+
         # Find next position by getting smallest closing angle (if ambiguous choose randomly) <-> equal to get energetically best position on growing edge
         else:
             min_angle = min(growing_edge_positions, key=lambda x: x['angle'])
@@ -450,8 +512,6 @@ class MolecularDynamicsSimulation:
                 best_candidate = random.choice(min_entries)
             else:
                 best_candidate = min_entries[0]
-            if not self.batch_mode:
-                print(f'POSITION CHOSEN RATIONALLY (happens {100-self.random_chance*100}% of times)')
 
         if best_candidate['angle'] < 30:
             self.close_pentamer(best_candidate['node_id'], best_candidate['neighbour_1'], best_candidate['neighbour_2'])
@@ -463,191 +523,167 @@ class MolecularDynamicsSimulation:
             self.close_pentamer(best_candidate['node_id'], best_candidate['neighbour_1'], best_candidate['neighbour_2'])
             
         else:
-            # No pentamer or hexamer closure: add new particle
-            if not self.batch_mode:
-                print(f"ADD NEW PARTICLE (TOTAL_NUM_PARTICLES={self.getParticleCount()})")
+            new_node = self.place_particle(best_candidate['node_id'], best_candidate['neighbour_1'])
+
+            edge = tuple(sorted((best_candidate['node_id'], best_candidate['neighbour_1'])))
             
-            node_id = max(self.node_ids) + 1  # Generate new node ID
+            current_boundary = None
+            for distinct_boundary in self.top_boundaries:
+                if edge in distinct_boundary:
+                    current_boundary = distinct_boundary
 
-            self.place_particle(node_id, best_candidate['node_id'], best_candidate['neighbour_1'])
+            current_boundary.discard(edge)
+            current_boundary.add(tuple(sorted((new_node, best_candidate['node_id']))))
+            current_boundary.add(tuple(sorted((new_node, best_candidate['neighbour_1']))))
 
-            # Update boundary edges
-            edge_to_remove = tuple(sorted((best_candidate['node_id'], best_candidate['neighbour_1'])))
-            self.boundary_edges.discard(edge_to_remove)
 
-            # Add new edges to boundary
-            new_edge1 = tuple(sorted((node_id, best_candidate['node_id'])))
-            new_edge2 = tuple(sorted((node_id, best_candidate['neighbour_1'])))
-            self.boundary_edges.add(new_edge1)
-            self.boundary_edges.add(new_edge2)
+    def cleanup_map_node_config(self):
+        idx_none = [idx for idx, (_, value) in enumerate(self.map_node_config.items()) if value is None]
+        
+        self.positions = np.delete(self.positions, idx_none, axis=0)
+        self.velocities = np.delete(self.velocities, idx_none, axis=0)
+        self.accelerations = np.delete(self.accelerations, idx_none, axis=0)
+        self.positions_old = np.delete(self.positions_old, idx_none, axis=0)
+        
+        map_new = {}
+        counter = 0
+        for node_id, idx in self.map_node_config.items():
+            if idx is not None:
+                map_new[node_id] = counter
+                counter += 1
+                
+        self.map_node_config = map_new
 
-    def place_particle(self, id, edgeStart, edgeEnd):
-        anchor_nodes = list(nx.common_neighbors(self.topology, edgeStart, edgeEnd))
-        if not anchor_nodes:
-            print("No common neighbor found.")
-            return
-        anchor_id = anchor_nodes[0]
-        anchor_idx = self.node_id_map[anchor_id]
-        edgeStart_idx = self.node_id_map[edgeStart]
-        edgeEnd_idx = self.node_id_map[edgeEnd]
-
-        pos_anchor = self.positions[anchor_idx, :, :]  # Shape: (3, 3)
-        pos_edgeStart = self.positions[edgeStart_idx, :, :]
-        pos_edgeEnd = self.positions[edgeEnd_idx, :, :]
-
-        pos_new_layers = np.zeros((3, 3), dtype=np.float64)
-        for i in range(3):
-            pAnchor = pos_anchor[i, :]
-            pBase11 = pos_edgeStart[i, :]
-            pBase21 = pos_edgeEnd[i, :]
-
-            coords = self.mirror_point(pBase11, pAnchor, pBase21)
-            pos_new_layers[i, :] = coords
-
-        self.add_particle(id, pos_new_layers)
-        self.fix_velocity_distribution()
-
-        self.topology.add_node(id)
-        self.topology.add_edge(id, edgeStart)
-        self.topology.add_edge(id, edgeEnd)
-
-    def fix_topology(self, min_topo_dist=5, max_physical_dist=0.8, check_interval=50, current_step=0):
+    def check_closure_event(self, min_topo_dist=5, max_physical_dist=0.8, check_interval=50, current_step=0):
         # Perform check only at specified intervals
         if current_step % check_interval != 0:
             return
 
+        self.cleanup_map_node_config()
+
         # Prepare positions and KDTree for spatial queries
         positions = self.positions[:, 0, :]  # Top layer positions
         kd_tree = KDTree(positions)
-        idx_to_node_id = [None] * len(positions)
-        for node_id, idx in self.node_id_map.items():
-            idx_to_node_id[idx] = node_id
+        idx_to_node_id = [node_id for node_id, _ in self.map_node_config.items()]
 
         # Identify valid boundary nodes
-        boundary_nodes = {node for edge in self.boundary_edges for node in edge if node in self.node_id_map}
+        boundary_nodes = set()
+        for distinct_boundary in self.top_boundaries:
+            nodes = {node for edge in distinct_boundary for node in edge}
+            boundary_nodes.update(nodes)
 
         for node in boundary_nodes:
-            node_idx = self.node_id_map[node]
-            node_pos = positions[node_idx]
+            idx = self.map_node_config[node]
+            pos = positions[idx]
 
             # Find the closest other node within max_physical_dist
-            distances, indices = kd_tree.query(node_pos, k=2)
+            distances, indices = kd_tree.query(pos, k=2)
             dist, idx = distances[1], indices[1]  # Skip the node itself (distances[0])
 
             if dist <= max_physical_dist:
                 other_node = idx_to_node_id[idx]
-                if other_node in self.node_id_map and nx.has_path(self.topology, node, other_node):
+                if other_node in self.map_node_config and nx.has_path(self.topology, node, other_node):
                     topo_dist = nx.shortest_path_length(self.topology, source=node, target=other_node)
                     if topo_dist >= min_topo_dist:
                         if not self.batch_mode:
                             print('FIXING EVENT OCCURRED')
 
-                        # Merge neighbor relationships from other_node to node
+                        current_boundary = None
                         for neighbor in list(self.topology.neighbors(other_node)):
                             self.topology.add_edge(node, neighbor)
-                            edge = tuple(sorted((node, neighbor)))
-                            if edge in self.boundary_edges:
-                                self.boundary_edges.discard(edge)
-                            else:
-                                self.boundary_edges.add(edge)
+                            old_edge = tuple(sorted((other_node, neighbor)))
+                            for distinct_boundary in self.top_boundaries:
+                                if old_edge in distinct_boundary:
+                                    current_boundary = distinct_boundary
+                                    current_boundary.discard(old_edge)
+                                    
+                                    new_edge = tuple(sorted((node, neighbor)))
+                                    current_boundary.add(new_edge)
 
                         # Remove other_node from data structures
-                        self.boundary_edges = {edge for edge in self.boundary_edges if other_node not in edge}
-                        self.topology.remove_node(other_node)
-                        idx_remove = self.node_id_map.pop(other_node)
-                        self.node_ids.remove(other_node)
-                        self.N_nodes -= 1
+                        current_boundary = {edge for edge in current_boundary if other_node not in edge}
+                        self.remove_particle(other_node)
+                        
+                        self.top_boundaries = self.decompose_boundary(node)
 
-                        # Update positions and related arrays
-                        self.positions = np.delete(self.positions, idx_remove, axis=0)
-                        self.velocities = np.delete(self.velocities, idx_remove, axis=0)
-                        self.accelerations = np.delete(self.accelerations, idx_remove, axis=0)
-                        self.positions_old = np.delete(self.positions_old, idx_remove, axis=0)
+                        return 
 
-                        # Update indices in node_id_map and idx_to_node_id
-                        for n_id, idx in self.node_id_map.items():
-                            if idx > idx_remove:
-                                self.node_id_map[n_id] = idx - 1
-                                idx_to_node_id[idx - 1] = n_id
-                            else:
-                                idx_to_node_id[idx] = n_id
-                        idx_to_node_id.pop()  # Remove last element after deletion
-                        return  # Exit after processing one node
+    def decompose_boundary(self, start_node):
+        # Normalize edges to sorted tuples for consistency
+        remaining_edges = self.top_boundaries[0].copy()
+        cycles = []
+        
+        while True:
+            # Find an edge that includes the start_node
+            start_edge = next((edge for edge in remaining_edges if start_node in edge), None)
+            if not start_edge:
+                break  # No more cycles can be formed starting from start_node
 
-    def fix_cycles(self):
+            # Initialize the new cycle
+            cycle = set()
+            cycle.add(start_edge)
+            remaining_edges.remove(start_edge)
+
+            # Determine the next node to visit
+            current_node = start_edge[1] if start_edge[0] == start_node else start_edge[0]
+            prev_node = start_node
+
+            while current_node != start_node:
+                # Find the next edge connected to current_node, excluding the edge we came from
+                next_edge = next(
+                    (edge for edge in remaining_edges if current_node in edge and (edge[0] != prev_node and edge[1] != prev_node)),
+                    None
+                )
+
+                if not next_edge:
+                    # Dead end reached; incomplete cycle
+                    break
+
+                # Add the edge to the current cycle
+                cycle.add(next_edge)
+                remaining_edges.remove(next_edge)
+
+                # Update nodes for the next iteration
+                prev_node, current_node = current_node, next_edge[1] if next_edge[0] == current_node else next_edge[0]
+
+            # Check if a complete cycle was formed
+            if current_node == start_node:
+                cycles.append(cycle)
+            else:
+                # If not a complete cycle, you might want to handle it differently
+                # For simplicity, we'll ignore incomplete cycles here
+                pass
+
+        return cycles
+
+    def check_degree_overload(self, max_degree):
+        for _, degree in self.topology.degree():
+            if degree >= max_degree:
+                return True
+        
+        return False
+
+    def remove_minimal_cycles(self):
         if self.getParticleCount() == 3:
             return
         
-        G = nx.Graph()
-        G.add_edges_from(self.boundary_edges)
-        cycles = nx.cycle_basis(G)
-        
-        # Filter for triangular cycles (cycles with exactly 3 nodes)
-        triangular_cycles = [cycle for cycle in cycles if len(cycle) == 3]
-
-        # Convert each triangular cycle into edges and remove from original edges
-        for cycle in triangular_cycles:
-            # Convert the cycle nodes to edges
-            cycle_edges = {tuple(sorted((cycle[i], cycle[(i+1) % 3]))) for i in range(3)}
-            unique_indices = set().union(*cycle_edges)
+        for distinct_boundary in self.top_boundaries:
+            G = nx.Graph()
+            G.add_edges_from(distinct_boundary)
+            cycles = nx.cycle_basis(G)
             
-            '''
-            for index in unique_indices:
-                print(index)
-                if self.topology.degree(index) == 7:
-                    neighbours = unique_indices - {index}
-                    neighbour1, neighbour2 = neighbours
-                    self.close_pentamer(index, neighbour1, neighbour2)
-                     
-                    # Remove these edges from the original set
-                    self.boundary_edges -= cycle_edges
-                    
-                    return
-            '''
-            self.boundary_edges -= cycle_edges
+            # Filter for triangular cycles (cycles with exactly 3 nodes)
+            triangular_cycles = [cycle for cycle in cycles if len(cycle) == 3]
+
+            # Convert each triangular cycle into edges and remove from original edges
+            for cycle in triangular_cycles:
+                # Convert the cycle nodes to edges
+                cycle_edges = {tuple(sorted((cycle[i], cycle[(i+1) % 3]))) for i in range(3)}
+                distinct_boundary -= cycle_edges
             
         return
-        
-    def init_vel_boltzmann(self, num_particles):
-        k_B = 1.38e-23
-        sigma = np.sqrt(k_B * self.T_K / self.mass)
-        vel = np.random.normal(0, sigma, (num_particles, 3)).astype(np.float64)
-        return vel
-
-    def fix_velocity_distribution(self):
-        k_B = 1.38e-23
-        N = self.N_nodes * 3  # Total number of particles (nodes * layers)
-
-        # Flatten velocities to shape (N, 3)
-        vel_flat = self.velocities.reshape(-1, 3)
-
-        # Step 1: Calculate the total velocity (sum of all velocities)
-        v_total = np.sum(vel_flat, axis=0)
-
-        # Step 2: Calculate the mean velocity
-        v_mean = v_total / N
-
-        # Step 3: Subtract the mean velocity from each particle
-        vel_flat -= v_mean
-
-        # Step 4: Calculate the total squared velocity
-        v_square_total = np.sum(vel_flat ** 2)
-
-        # Step 5: Calculate the mean squared velocity (average over all particles)
-        v_square_mean = v_square_total / N
-
-        # Step 6: Calculate the current kinetic energy and the desired kinetic energy
-        kinetic_energy_per_particle = 0.5 * self.mass * v_square_mean
-        desired_kinetic_energy = 1.5 * k_B * self.T_K
-
-        # Step 7: Compute the scaling factor
-        scaling_factor = np.sqrt(desired_kinetic_energy / kinetic_energy_per_particle)
-
-        # Step 8: Rescale each particle's velocity
-        vel_flat *= scaling_factor
-
-        # Reshape velocities back to original shape
-        self.velocities = vel_flat.reshape(self.N_nodes, 3, 3)
+    
+    
 
     # Load and save
     def save_state_simulation(self):
@@ -660,11 +696,8 @@ class MolecularDynamicsSimulation:
             'positions_old': copy.deepcopy(self.positions_old),
             'velocities': copy.deepcopy(self.velocities),
             'accelerations': copy.deepcopy(self.accelerations),
-            'boundaries': copy.deepcopy(self.boundary_edges),
-            'node_ids': copy.deepcopy(self.node_ids),
-            'node_id_map': copy.deepcopy(self.node_id_map),
-            'N_nodes': copy.deepcopy(self.N_nodes)
-            
+            'boundaries': copy.deepcopy(self.top_boundaries),
+            'map_node_config': copy.deepcopy(self.map_node_config),
         }
         self.state_trajectory.append(state)
 
@@ -682,11 +715,8 @@ class MolecularDynamicsSimulation:
             'positions_old': copy.deepcopy(self.positions_old),
             'velocities': copy.deepcopy(self.velocities),
             'accelerations': copy.deepcopy(self.accelerations),
-            'boundaries': copy.deepcopy(self.boundary_edges),
-            'node_ids': copy.deepcopy(self.node_ids),
-            'node_id_map': copy.deepcopy(self.node_id_map),
-            'N_nodes': copy.deepcopy(self.N_nodes)
-            
+            'boundaries': copy.deepcopy(self.top_boundaries),
+            'map_node_config': copy.deepcopy(self.map_node_config),
         }
         self.state_trajectory.append(state)
 
@@ -708,15 +738,12 @@ class MolecularDynamicsSimulation:
 
         # Update the state
         loaded_instance.positions = trajectory['positions']
-        loaded_instance.positions = trajectory['positions']
         loaded_instance.positions_old = trajectory['positions_old']
         loaded_instance.velocities = trajectory['velocities']
         loaded_instance.accelerations = trajectory['accelerations']
         loaded_instance.topology = trajectory['topology']
-        loaded_instance.boundary_edges = trajectory['boundaries']
-        loaded_instance.node_ids = trajectory['node_ids']
-        loaded_instance.node_id_map = trajectory['node_id_map']
-        loaded_instance.N_nodes = trajectory['N_nodes']
+        loaded_instance.top_boundaries = trajectory['boundaries']
+        loaded_instance.map_node_config = trajectory['map_node_config']
 
         return loaded_instance
 
@@ -728,25 +755,15 @@ class MolecularDynamicsSimulation:
         # Update positions using Verlet algorithm
         dt2 = self.dt ** 2
         positions_new = 2 * self.positions - self.positions_old + self.accelerations * dt2
-
-        # Update old positions
         self.positions_old[:] = self.positions.copy()
-
-        # Update positions
         self.positions[:] = positions_new
 
     def langevin_update(self):
         # Recalculate forces and update accelerations
         self.update_accelerations()
 
-        # Update positions using Langevin algorithm
-        positions_new = self.positions + (self.accelerations * self.mass * self.dt) / self.damping_coeff
-
-        # Update old positions
         self.positions_old[:] = self.positions.copy()
-
-        # Update positions
-        self.positions[:] = positions_new
+        self.positions += (self.accelerations * self.mass * self.dt) / self.damping_coeff
 
     def simulate_step(self):
         if self.method == 'verlet':
@@ -796,11 +813,15 @@ class SimulationVisualizer:
             plot_layers = 1 if self.plot_outer_layer else 3
 
             for j in range(plot_layers):
-                pos1 = self.sim.positions[self.sim.node_id_map[edge[0]], j, :]*self.scaling
-                pos2 = self.sim.positions[self.sim.node_id_map[edge[1]], j, :]*self.scaling
+                pos1 = self.sim.positions[self.sim.map_node_config[edge[0]], j, :]*self.scaling
+                pos2 = self.sim.positions[self.sim.map_node_config[edge[1]], j, :]*self.scaling
 
                 edge_tuple = tuple(sorted(edge))
-                color = 'red' if edge_tuple in self.sim.boundary_edges else 'black'
+                edge_color_palette = ['red', 'magenta', 'orange']
+                color = 'black'
+                for i, distinct_boundary in enumerate(self.sim.top_boundaries):
+                    if edge_tuple in distinct_boundary:
+                        color = edge_color_palette[i]
 
                 line, = self.ax.plot([pos1[0], pos2[0]], [pos1[1], pos2[1]], [pos1[2], pos2[2]], color=color)
                 self.edge_lines.append(line)
@@ -844,11 +865,15 @@ class SimulationVisualizer:
             plot_layers = 1 if self.plot_outer_layer else 3
 
             for j in range(plot_layers):
-                pos1 = self.sim.positions[self.sim.node_id_map[edge[0]], j, :]*self.scaling
-                pos2 = self.sim.positions[self.sim.node_id_map[edge[1]], j, :]*self.scaling
+                pos1 = self.sim.positions[self.sim.map_node_config[edge[0]], j, :]*self.scaling
+                pos2 = self.sim.positions[self.sim.map_node_config[edge[1]], j, :]*self.scaling
 
                 edge_tuple = tuple(sorted(edge))
-                color = 'red' if edge_tuple in self.sim.boundary_edges else 'black'
+                edge_color_palette = ['red', 'magenta', 'orange']
+                color = 'black'
+                for i, distinct_boundary in enumerate(self.sim.top_boundaries):
+                    if edge_tuple in distinct_boundary:
+                        color = edge_color_palette[i]
 
                 # Draw the new edge and store the line reference
                 line, = self.ax.plot([pos1[0], pos2[0]], [pos1[1], pos2[1]], [pos1[2], pos2[2]], color=color)
@@ -888,9 +913,10 @@ class SimulationVisualizer:
         plt.pause(0.1)
 
 # Main simulation loop
-def run_simulation(sim, visualizer, n_steps, add_unit_every, save_every, plot_every, save_what):
+def run_simulation(sim, visualizer, n_steps, add_unit_every, save_every, plot_every, save_what, n_steps_equilibrate = 5000, max_degree=12):
     start_time = time.time()
     for step in range(n_steps):
+        # User closes visualizer -> save current state and stop simulation
         if visualizer is not None and visualizer.stop_simulation:
             print('Simulation stopped by user.')
             if save_what == 'simulation':
@@ -898,15 +924,17 @@ def run_simulation(sim, visualizer, n_steps, add_unit_every, save_every, plot_ev
             elif save_what == 'trajectory':
                 sim.save_state_trajectory()
             break
-
+        
+        # Checkpoint (state) is saved after every save_every steps
         if step != 0 and step % save_every == 0:
             if save_what == 'simulation':
                 sim.save_state_simulation()
             elif save_what == 'trajectory':
                 sim.save_state_trajectory()
 
+        # If assembly self-closed -> save simulation, print statistics and stop
         if sim.is_closed_surface():
-            for i in range(1000):
+            for i in range(n_steps_equilibrate):
                 sim.simulate_step()
             
             if visualizer is not None:
@@ -927,11 +955,18 @@ def run_simulation(sim, visualizer, n_steps, add_unit_every, save_every, plot_ev
 
             num_particles = sim.getParticleCount()
             print(f'{num_particles} nodes were added.')
+            
+            degree_distribution = sim.getNodeStatistics()
+            for degree, count in degree_distribution.items():
+                print(f'NODES OF DEGREE {degree} = {count}')
+            
             break
-
+        
+        # Add new node to assembly after add_unit_every steps
         if step != 0 and step % add_unit_every == 0:
             sim.next_position()
 
+        # Plot the assembly after every plot_every steps
         if step % plot_every == 0 and visualizer is not None:
             visualizer.update_plot()
             #print(f'E_total = {sim.calcTotalEnergy()}')
@@ -939,9 +974,19 @@ def run_simulation(sim, visualizer, n_steps, add_unit_every, save_every, plot_ev
         # Simulate one step
         sim.simulate_step()
         # Check if two nodes are close enough for merging event of far apart surfaces
-        sim.fix_topology(min_topo_dist=5, max_physical_dist=0.5, check_interval=50, current_step=step)
-        if (step % 250):
-            sim.fix_cycles()
+        sim.check_closure_event(min_topo_dist=5, max_physical_dist=0.5, check_interval=50, current_step=step)
+        if (step % 250 == 0):
+            # If the first half shell closes there is a triangular boundary -> remove it so assembly does not
+            # continue adding nodes at this boundary
+            sim.remove_minimal_cycles()
+            # Check if simulation fails by infinitely adding edges to a node -> if yes, stop simulation
+            if sim.check_degree_overload(max_degree):
+                print(f'Node degree overload encountered (DEGREE >= {max_degree}). Aborting simulation.')
+                degree_distribution = sim.getNodeStatistics()
+                for degree, count in degree_distribution.items():
+                    print(f'NODES OF DEGREE {degree} = {count}')
+                    
+                break
 
     # Keep the plot open after simulation ends, if visualizer exists
     if visualizer is not None: # in batch mode, visualizer is None
@@ -998,7 +1043,7 @@ if __name__ == '__main__':
     # FIXED PARAMETERS
     MASS = 1
     T_C = 20
-    PLOT_OUTER_LAYER = False
+    PLOT_OUTER_LAYER = True
     DT = 0.01
     METHOD = 'langevin'
     DAMPING_COEFFICIENT = 0.1
@@ -1009,18 +1054,21 @@ if __name__ == '__main__':
     random_chance = args.random_chance
 
     # DIPID PARAMETERS
+    #r = 14.25 #nm
+    #h = 18 #nm
+    #alpha_deg = args.alpha_sticky_deg
+    #l_sticky = np.tan(np.radians(alpha_sticky_deg))* h_dipid #nm 
+
     r = 14.25 #nm
     h = 18 #nm
-    alpha_deg = args.alpha_sticky_deg
-    #l_sticky = np.tan(np.radians(alpha_sticky_deg))* h_dipid #nm 
+    alpha_deg = 13
 
     # RUN FLAVOUR
     batch_mode = args.batch_mode
 
-    #alpha_deg = 10
     # DYNAMIC PARAMETERS
     A0, DELTA, INTERLAYER_DISTANCE, SCALING = get_sim_params_from_dipid(r, h, alpha_deg, True)
-
+    print(f'DELTA = {DELTA}')
     
     # Packing DIPID info and passing to Simulation class to use later in analysis
     MONOMER_INFO = {
@@ -1030,6 +1078,8 @@ if __name__ == '__main__':
         'scaling': SCALING
     }
 
+
+    '''
     sim = MolecularDynamicsSimulation(
         dt=DT,
         mass=MASS,
@@ -1045,7 +1095,24 @@ if __name__ == '__main__':
         monomer_info=MONOMER_INFO,
         batch_mode=batch_mode
     )
-
+    
+    '''
+    sim = MolecularDynamicsSimulation(
+        dt=0.01,
+        mass=1,
+        lengthEq=A0,
+        delta=DELTA,
+        km=1,
+        interlayer_distance=INTERLAYER_DISTANCE,
+        T_C=20,
+        method='langevin',
+        damping_coeff=0.1,
+        random_placement=True,
+        random_chance=0.0,
+        monomer_info=MONOMER_INFO,
+        batch_mode=False
+    )
+    
     if not args.batch_mode:
         visualizer = SimulationVisualizer(sim, scaling=SCALING, plot_outer_layer=PLOT_OUTER_LAYER)
     else:
@@ -1057,20 +1124,28 @@ if __name__ == '__main__':
     save_every = args.save_every
     plot_every = args.plot_every
 
+    
     try:
         run_simulation(sim, visualizer, n_steps, add_unit_every, save_every, plot_every, 'simulation')
     except Exception as e:
         print(f"An error occurred: {e}")
         traceback.print_exc()
-
+    
+    
     # Load and continue simulation if needed
     '''
     try:
-        filename = './20241119134515_sim_langevin_dt0.01_delta0.18_km0.1_TC20_damping0.1_cont1.pkl'
-        newsim = MolecularDynamicsSimulation.load_state(filename, 'cont1', start_at=-20)
+        n_steps = 1000000
+        add_unit_every = 250
+        save_every = args.save_every
+        plot_every = args.plot_every
+        
+        filename = './Simulation/simulations/test_case_1.pkl'
+        newsim = MolecularDynamicsSimulation.load_state(filename, 'cont1', start_at=-40)
         visualizer = SimulationVisualizer(newsim, plot_outer_layer=PLOT_OUTER_LAYER)
         run_simulation(newsim, visualizer, n_steps, add_unit_every, save_every, plot_every, 'simulation')
     except Exception as e:
         print(f"An error occurred: {e}")
         traceback.print_exc()
     '''
+    

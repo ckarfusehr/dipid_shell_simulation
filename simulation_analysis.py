@@ -152,7 +152,7 @@ if __name__ == '__main__':
     
     # Load and animate the trajectory
     FILES = [
-        './simulations/20241122155037_sim_langevin_dt0.01_delta0.0928680646883268_km0.1_TC20_damping0.1_random0.05.pkl'
+        './Simulation/simulations/20241209123840_sim_langevin_dt0.01_delta0.05099817454927725_km1_TC20_damping0.1_random0.0.pkl'
     ]
 
     extracted_data = {}

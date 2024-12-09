@@ -178,7 +178,7 @@ class SimulationAnimator:
     
 if __name__ == '__main__':
     # Load and animate the trajectory
-    filename = './simulations/20241122155037_sim_langevin_dt0.01_delta0.0928680646883268_km0.1_TC20_damping0.1_random0.05.pkl'
+    filename = './Simulation/simulations/20241209112658_sim_langevin_dt0.01_delta0.024688272691943597_km1_TC20_damping0.1_random0.0.pkl'
     cd = Path().resolve()
     filepath = cd / filename
 
