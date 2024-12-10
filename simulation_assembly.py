@@ -107,7 +107,41 @@ def calc_force_batch(v_r1_array, v_r2_array, k, a0):
     v_f = -k * stretch[:, np.newaxis] * v_r12_norm
     return v_f
 
-        
+
+@njit
+def simulate_steps_jit(positions, positions_old, velocities, accelerations, 
+                       mass, dt, damping_coeff, method_flag, 
+                       k1, k2, k3, lengthEq, delta, a12, a23, interlayer_distance,
+                       node_indices, neighbor_indices, n_inner_steps):
+    dt2 = dt * dt
+    for _ in range(n_inner_steps):
+        # Update accelerations using already defined update_accelerations_jit
+        update_accelerations_jit(
+            positions,
+            accelerations,
+            mass,
+            k1,
+            k2,
+            k3,
+            lengthEq,
+            delta,
+            a12,
+            a23,
+            node_indices,
+            neighbor_indices,
+            interlayer_distance
+        )
+
+        # Update positions depending on method_flag (0=verlet, 1=langevin)
+        if method_flag == 0:
+            # Verlet
+            positions_new = 2.0 * positions - positions_old + accelerations * dt2
+            positions_old[:] = positions
+            positions[:] = positions_new
+        else:
+            # Langevin
+            positions_old[:] = positions
+            positions[:] = positions + (accelerations * mass * dt) / damping_coeff
 
 class MolecularDynamicsSimulation:
     # Initializations
@@ -129,6 +163,11 @@ class MolecularDynamicsSimulation:
 
         #Simulation parameters
         self.method = method
+        if self.method == 'verlet':
+            self.method_flag = 0
+        else:
+            self.method_flag = 1
+            
         self.dt = np.float64(dt)
         self.T_C = T_C
         self.T_K = T_C + 273.15
@@ -601,6 +640,7 @@ class MolecularDynamicsSimulation:
         self.map_node_config = map_new
 
     def check_closure_event(self, min_topo_dist=5, max_physical_dist=0.8):
+        closure_occurred = False
 
         self.cleanup_map_node_config()
 
@@ -648,8 +688,8 @@ class MolecularDynamicsSimulation:
                         self.remove_particle(other_node)
                         
                         self.top_boundaries = self.decompose_boundary(node)
-
-                        return 
+                        closure_occurred = True
+                        return closure_occurred
 
     def decompose_boundary(self, start_node):
         # Normalize edges to sorted tuples for consistency
@@ -956,87 +996,119 @@ class SimulationVisualizer:
         plt.pause(0.1)
 
 # Main simulation loop
-def run_simulation(sim, visualizer, n_steps, add_unit_every, save_every, plot_every, save_what, n_steps_equilibrate = 5000, max_degree=12):
+
+def run_simulation(sim, visualizer, n_steps, add_unit_every, save_every_batch, plot_every_batch, save_what, max_degree=12):
     start_time = time.time()
-    for step in range(n_steps):
-        # User closes visualizer -> save current state and stop simulation
-        if visualizer is not None and visualizer.stop_simulation:
-            print('Simulation stopped by user.')
-            if save_what == 'simulation':
-                sim.save_state_simulation()
-            elif save_what == 'trajectory':
-                sim.save_state_trajectory()
-            break
-        
-        # Checkpoint (state) is saved after every save_every steps
-        if step != 0 and step % save_every == 0:
+    batch_size = add_unit_every  # batch_size defined as add_unit_every
+    n_batches = n_steps // batch_size
+    remainder = n_steps % batch_size
+
+    for batch_idx in range(n_batches):
+        # Save state if needed (skip the first batch to avoid saving at step=0)
+        if batch_idx != 0 and batch_idx % save_every_batch == 0:
             if save_what == 'simulation':
                 sim.save_state_simulation()
             elif save_what == 'trajectory':
                 sim.save_state_trajectory()
 
-        # If assembly self-closed -> save simulation, print statistics and stop
+        # If the surface is closed, wrap-up sim
         if sim.is_closed_surface():
-            for i in range(n_steps_equilibrate):
+            for i in range(add_unit_every):
                 sim.simulate_step()
-            
             if visualizer is not None:
                 visualizer.update_plot()
-                
             if save_what == 'simulation':
                 sim.save_state_simulation()
             elif save_what == 'trajectory':
                 sim.save_state_trajectory()
-            
+
             total_time = time.time() - start_time
-            hours, remainder = divmod(total_time, 3600)
-            minutes, seconds = divmod(remainder, 60)
-
-            print(f'SIMULATION FINISHED')
-            print(f'Statistics:')
-            print(f'{step} steps were simulated in {int(hours)} hours {int(minutes)} minutes {int(seconds)} seconds.')
-
+            hours, remainder_time = divmod(total_time, 3600)
+            minutes, seconds = divmod(remainder_time, 60)
+            print('SIMULATION FINISHED')
+            steps_done = batch_idx * batch_size
+            print(f'{steps_done} steps were simulated in {int(hours)} hours {int(minutes)} minutes {int(seconds)} seconds.')
             num_particles = sim.getParticleCount()
             print(f'{num_particles} nodes were added.')
-            
             degree_distribution = sim.getNodeStatistics()
             for degree, count in degree_distribution.items():
                 print(f'NODES OF DEGREE {degree} = {count}')
-            
-            break
+                
+            if visualizer is not None:
+                plt.ioff()
+                plt.show()
+            return
+
+        # Do closure event check before each batch
+        closure_occurred = sim.check_closure_event(min_topo_dist=5, max_physical_dist=0.5)
         
-        # Add new node to assembly after add_unit_every steps
-        if step != 0 and step % add_unit_every == 0:
+        # Add unit if no closure occurred
+        if batch_idx != 0 and not closure_occurred:
             sim.next_position()
 
-        # Plot the assembly after every plot_every steps
-        if step % plot_every == 0 and visualizer is not None:
-            visualizer.update_plot()
-            #print(f'E_total = {sim.calcTotalEnergy()}')
+        # Build node/neighbor arrays
+        node_indices = []
+        neighbor_indices = []
+        for edge in sim.topology.edges():
+            node_indices.append(sim.map_node_config[edge[0]])
+            neighbor_indices.append(sim.map_node_config[edge[1]])
+        node_indices = np.array(node_indices, dtype=np.int64)
+        neighbor_indices = np.array(neighbor_indices, dtype=np.int64)
 
-        # Simulate one step
-        sim.simulate_step()
-        # Check if two nodes are close enough for merging event of far apart surfaces
-        if step % add_unit_every == 0:
-            sim.check_closure_event(min_topo_dist=5, max_physical_dist=0.5)
-            
-        if (step % 250 == 0):
-            # If the first half shell closes there is a triangular boundary -> remove it so assembly does not
-            # continue adding nodes at this boundary
-            sim.remove_minimal_cycles()
-            # Check if simulation fails by infinitely adding edges to a node -> if yes, stop simulation
+        # Run a batch of steps in numba-jitted loop
+        simulate_steps_jit(sim.positions,
+                           sim.positions_old,
+                           sim.velocities,
+                           sim.accelerations,
+                           sim.mass,
+                           sim.dt,
+                           sim.damping_coeff,
+                           sim.method_flag,
+                           sim.k1,
+                           sim.k2,
+                           sim.k3,
+                           sim.lengthEq,
+                           sim.delta,
+                           sim.a12,
+                           sim.a23,
+                           sim.interlayer_distance,
+                           node_indices,
+                           neighbor_indices,
+                           batch_size)
+
+        # Remove minimal cycles every batch
+        sim.remove_minimal_cycles()
+        # Check degree overload every 10 batches
+        if batch_idx % 10 == 0:
             if sim.check_degree_overload(max_degree):
                 print(f'Node degree overload encountered (DEGREE >= {max_degree}). Aborting simulation.')
                 degree_distribution = sim.getNodeStatistics()
                 for degree, count in degree_distribution.items():
                     print(f'NODES OF DEGREE {degree} = {count}')
-                    
-                break
+                if visualizer is not None:
+                    plt.ioff()
+                    plt.show()
+                return
 
-    # Keep the plot open after simulation ends, if visualizer exists
-    if visualizer is not None: # in batch mode, visualizer is None
-        plt.ioff()
-        plt.show()
+        # Plot if needed
+        if batch_idx % plot_every_batch == 0 and visualizer is not None:
+            visualizer.update_plot()
+            
+    # Wrap up remaining simulation steps
+    if remainder > 0:
+        for i in range(remainder):
+            sim.simulate_step()
+                
+    # Save final state if needed
+    if save_what == 'simulation':
+        sim.save_state_simulation()
+    elif save_what == 'trajectory':
+        sim.save_state_trajectory()
+
+    # # Keep the plot open after simulation ends, if visualizer exists
+    # if visualizer is not None:
+    #     plt.ioff()
+    #     plt.show()
 
 def get_sim_params_from_dipid(r, h, alpha_sticky_deg, printout=True):
     angle_sticky_rad = np.radians(alpha_sticky_deg)
@@ -1046,7 +1118,7 @@ def get_sim_params_from_dipid(r, h, alpha_sticky_deg, printout=True):
     a_0 = 2*(r*np.cos(angle_sticky_rad) + l_T)
     r_container = a_0/(2*np.sin(angle_sticky_rad))
     a_2 = 2*(r_container - h)*np.sin(angle_sticky_rad)
-    
+
     a_eq = (a_0 + a_2)/2
     delta_eq = (a_0 - a_2)/4
     interlayer_distance = h/2
@@ -1074,8 +1146,8 @@ if __name__ == '__main__':
     # Parse command-line arguments
     parser = argparse.ArgumentParser(description="Run molecular dynamics simulation with specified parameters.")
     parser.add_argument('--alpha_sticky_deg', type=float, default=15, help="Alpha sticky degree (default: 15)")
-    parser.add_argument('--save_every', type=int, default=250, help="Steps interval to save simulation state (default: 250)")
-    parser.add_argument('--plot_every', type=int, default=250, help="Steps interval to plot simulation state (default: 250)")
+    parser.add_argument('--save_every_batch', type=int, default=1, help="Steps interval to save simulation state (default: 250)")
+    parser.add_argument('--plot_every_batch', type=int, default=1, help="Steps interval to plot simulation state (default: 250)")
     parser.add_argument('--n_steps', type=int, default=10000000, help="Total number of simulation steps (default: 10000000)")
     parser.add_argument('--batch_mode', action='store_true', help="Run simulation in batch mode without plotting")
     parser.add_argument('--random_placement', action='store_true', help="Place monomers randomly with random_chance")
@@ -1142,11 +1214,11 @@ if __name__ == '__main__':
 
     n_steps = args.n_steps
     add_unit_every = args.add_unit_every
-    save_every = args.save_every
-    plot_every = args.plot_every
+    save_every_batch = args.save_every_batch
+    plot_every_batch = args.plot_every_batch
 
     try:
-        run_simulation(sim, visualizer, n_steps, add_unit_every, save_every, plot_every, 'simulation')
+        run_simulation(sim, visualizer, n_steps, add_unit_every, save_every_batch, plot_every_batch, 'simulation')
     except Exception as e:
         print(f"An error occurred: {e}")
         traceback.print_exc()
