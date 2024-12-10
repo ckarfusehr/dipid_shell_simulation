@@ -8,6 +8,7 @@ from pathlib import Path
 from datetime import datetime
 import random
 import argparse
+from numba import njit
 
 import matplotlib.pyplot as plt
 
@@ -275,19 +276,40 @@ class MolecularDynamicsSimulation:
 
         return angle_degrees
 
-    def calc_force_batch(self, v_r1_array, v_r2_array, k, a0):
+    @staticmethod
+    @njit
+    def calc_force_batch(v_r1_array, v_r2_array, k, a0):
         v_r12 = v_r1_array - v_r2_array  # Shape: (N, 3)
-        l = np.linalg.norm(v_r12, axis=1)  # Shape: (N,)
-
+        l = np.sqrt((v_r12 * v_r12).sum(axis=1))  # Norm along axis=1
+        
         # Prevent division by zero
-        l_safe = np.where(l == 0, 1, l)
+        mask_zero = (l == 0)
+        l_safe = l.copy()
+        l_safe[mask_zero] = 1.0
 
-        v_r12_norm = v_r12 / l_safe[:, np.newaxis]  # Shape: (N, 3)
-        # Adjust force where l == 0 to zero
-        v_r12_norm[l == 0] = 0
+        # Normalized directions
+        v_r12_norm = v_r12 / l_safe[:, np.newaxis]
+        # Where l == 0, force is zero
+        v_r12_norm[mask_zero] = 0.0
 
-        v_f = -k * (l - a0)[:, np.newaxis] * v_r12_norm  # Shape: (N, 3)
+        # Hooke's law forces
+        stretch = (l - a0)
+        v_f = -k * stretch[:, np.newaxis] * v_r12_norm
         return v_f
+    
+    # def calc_force_batch(self, v_r1_array, v_r2_array, k, a0):
+    #     v_r12 = v_r1_array - v_r2_array  # Shape: (N, 3)
+    #     l = np.linalg.norm(v_r12, axis=1)  # Shape: (N,)
+
+    #     # Prevent division by zero
+    #     l_safe = np.where(l == 0, 1, l)
+
+    #     v_r12_norm = v_r12 / l_safe[:, np.newaxis]  # Shape: (N, 3)
+    #     # Adjust force where l == 0 to zero
+    #     v_r12_norm[l == 0] = 0
+
+    #     v_f = -k * (l - a0)[:, np.newaxis] * v_r12_norm  # Shape: (N, 3)
+    #     return v_f
     
     def calcTotalEnergy(self):
         totalEnergy = 0
@@ -1035,6 +1057,7 @@ if __name__ == '__main__':
     parser.add_argument('--batch_mode', action='store_true', help="Run simulation in batch mode without plotting")
     parser.add_argument('--random_placement', action='store_true', help="Place monomers randomly with random_chance")
     parser.add_argument('--random_chance', type=float, default=0.005, help="Chance of randomly placing a monomer")
+    parser.add_argument('--add_unit_every', type=int, default=4000, help="Chance of randomly placing a monomer")
 
 
     args = parser.parse_args()
@@ -1050,7 +1073,7 @@ if __name__ == '__main__':
     KM = 0.1
     
     # VARIABLE SIMULATION PARAMETERS
-    random_placement = args.random_placement
+    random_placement = False #args.random_placement
     random_chance = args.random_chance
 
     # DIPID PARAMETERS
@@ -1095,7 +1118,7 @@ if __name__ == '__main__':
         visualizer = None  # No visualizer in batch mode
 
     n_steps = args.n_steps
-    add_unit_every = 1000
+    add_unit_every = args.add_unit_every
     save_every = args.save_every
     plot_every = args.plot_every
 
