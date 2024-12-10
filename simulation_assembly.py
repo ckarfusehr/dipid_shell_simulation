@@ -600,10 +600,7 @@ class MolecularDynamicsSimulation:
                 
         self.map_node_config = map_new
 
-    def check_closure_event(self, min_topo_dist=5, max_physical_dist=0.8, check_interval=50, current_step=0):
-        # Perform check only at specified intervals
-        if current_step % check_interval != 0:
-            return
+    def check_closure_event(self, min_topo_dist=5, max_physical_dist=0.8):
 
         self.cleanup_map_node_config()
 
@@ -1020,7 +1017,9 @@ def run_simulation(sim, visualizer, n_steps, add_unit_every, save_every, plot_ev
         # Simulate one step
         sim.simulate_step()
         # Check if two nodes are close enough for merging event of far apart surfaces
-        sim.check_closure_event(min_topo_dist=5, max_physical_dist=0.5, check_interval=50, current_step=step)
+        if step % add_unit_every == 0:
+            sim.check_closure_event(min_topo_dist=5, max_physical_dist=0.5)
+            
         if (step % 250 == 0):
             # If the first half shell closes there is a triangular boundary -> remove it so assembly does not
             # continue adding nodes at this boundary
