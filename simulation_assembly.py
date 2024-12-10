@@ -18,6 +18,97 @@ from scipy.spatial import KDTree
 
 np.seterr(divide='raise', over='raise', under='raise', invalid='raise')
 
+
+### Numba functions ###
+@njit
+def update_accelerations_jit(positions, accelerations, mass, k1, k2, k3,
+                            lengthEq, delta, a12, a23,
+                            node_indices, neighbor_indices,
+                            interlayer_distance):
+    accelerations[:] = 0.0
+
+    pos_top = positions[:, 0, :]
+    pos_mid = positions[:, 1, :]
+    pos_low = positions[:, 2, :]
+
+    # Self-interactions
+    forces_top_mid_self = calc_force_batch(pos_top, pos_mid, k2, interlayer_distance)
+    forces_mid_low_self = calc_force_batch(pos_mid, pos_low, k2, interlayer_distance)
+
+    accelerations[:, 0, :] += forces_top_mid_self / mass
+    accelerations[:, 1, :] += (-forces_top_mid_self + forces_mid_low_self) / mass
+    accelerations[:, 2, :] += -forces_mid_low_self / mass
+
+    pos_node_layers = positions[node_indices, :, :]
+    pos_neigh_layers = positions[neighbor_indices, :, :]
+
+    force_top = calc_force_batch(pos_node_layers[:, 0, :], pos_neigh_layers[:, 0, :],
+                                    k1, lengthEq + 2.0 * delta)
+    force_mid = calc_force_batch(pos_node_layers[:, 1, :], pos_neigh_layers[:, 1, :],
+                                    k1, lengthEq)
+    force_low = calc_force_batch(pos_node_layers[:, 2, :], pos_neigh_layers[:, 2, :],
+                                    k1, lengthEq - 2.0 * delta)
+
+    force_top_mid = calc_force_batch(pos_node_layers[:, 0, :], pos_neigh_layers[:, 1, :],
+                                        k3, a12)
+    force_mid_top = calc_force_batch(pos_node_layers[:, 1, :], pos_neigh_layers[:, 0, :],
+                                        k3, a12)
+    force_mid_low = calc_force_batch(pos_node_layers[:, 1, :], pos_neigh_layers[:, 2, :],
+                                        k3, a23)
+    force_low_mid = calc_force_batch(pos_node_layers[:, 2, :], pos_neigh_layers[:, 1, :],
+                                        k3, a23)
+
+    N_pairs = node_indices.shape[0]
+    for i in range(N_pairs):
+        n_idx = node_indices[i]
+        neigh_idx = neighbor_indices[i]
+
+        # Same-layer
+        acc = accelerations
+        acc[n_idx, 0, :] += force_top[i] / mass
+        acc[neigh_idx, 0, :] -= force_top[i] / mass
+
+        acc[n_idx, 1, :] += force_mid[i] / mass
+        acc[neigh_idx, 1, :] -= force_mid[i] / mass
+
+        acc[n_idx, 2, :] += force_low[i] / mass
+        acc[neigh_idx, 2, :] -= force_low[i] / mass
+
+        # Cross-layer
+        acc[n_idx, 0, :] += force_top_mid[i] / mass
+        acc[neigh_idx, 1, :] -= force_top_mid[i] / mass
+
+        acc[n_idx, 1, :] += force_mid_top[i] / mass
+        acc[neigh_idx, 0, :] -= force_mid_top[i] / mass
+
+        acc[n_idx, 1, :] += force_mid_low[i] / mass
+        acc[neigh_idx, 2, :] -= force_mid_low[i] / mass
+
+        acc[n_idx, 2, :] += force_low_mid[i] / mass
+        acc[neigh_idx, 1, :] -= force_low_mid[i] / mass
+        
+@njit
+def calc_force_batch(v_r1_array, v_r2_array, k, a0):
+    v_r12 = v_r1_array - v_r2_array  # Shape: (N, 3)
+    l = np.sqrt((v_r12 * v_r12).sum(axis=1))  # Norm along axis=1
+    
+    # Prevent division by zero
+    mask_zero = (l == 0)
+    l_safe = l.copy()
+    l_safe[mask_zero] = 1.0
+
+    # Normalized directions
+    v_r12_norm = v_r12 / l_safe[:, np.newaxis]
+    # Where l == 0, force is zero
+    v_r12_norm[mask_zero] = 0.0
+
+    # Hooke's law forces
+    stretch = (l - a0)
+    v_f = -k * stretch[:, np.newaxis] * v_r12_norm
+    return v_f
+
+        
+
 class MolecularDynamicsSimulation:
     # Initializations
     def __init__(self, dt, mass, lengthEq, delta, km, interlayer_distance=None, T_C=20, origin=np.zeros(3), method='langevin', damping_coeff=1, random_placement = False, random_chance = 0, monomer_info=None, batch_mode=False):
@@ -276,27 +367,6 @@ class MolecularDynamicsSimulation:
 
         return angle_degrees
 
-    @staticmethod
-    @njit
-    def calc_force_batch(v_r1_array, v_r2_array, k, a0):
-        v_r12 = v_r1_array - v_r2_array  # Shape: (N, 3)
-        l = np.sqrt((v_r12 * v_r12).sum(axis=1))  # Norm along axis=1
-        
-        # Prevent division by zero
-        mask_zero = (l == 0)
-        l_safe = l.copy()
-        l_safe[mask_zero] = 1.0
-
-        # Normalized directions
-        v_r12_norm = v_r12 / l_safe[:, np.newaxis]
-        # Where l == 0, force is zero
-        v_r12_norm[mask_zero] = 0.0
-
-        # Hooke's law forces
-        stretch = (l - a0)
-        v_f = -k * stretch[:, np.newaxis] * v_r12_norm
-        return v_f
-    
     # def calc_force_batch(self, v_r1_array, v_r2_array, k, a0):
     #     v_r12 = v_r1_array - v_r2_array  # Shape: (N, 3)
     #     l = np.linalg.norm(v_r12, axis=1)  # Shape: (N,)
@@ -367,81 +437,35 @@ class MolecularDynamicsSimulation:
 
     # Check if there is still a boundary in the assembly -> if not, the surface must be closed
     def is_closed_surface(self):
-        return sum(len(s) for s in self.top_boundaries) <= 3 and self.getParticleCount() > 3
-
-    def update_accelerations(self):
-        # Reset accelerations
-        self.accelerations.fill(0)  # Shape: (N_nodes, 3, 3)
-
-        # Extract positions for each layer
-        pos_top = self.positions[:, 0, :]  # Shape: (N_nodes, 3)
-        pos_mid = self.positions[:, 1, :]
-        pos_low = self.positions[:, 2, :]
-
-        # Self-interactions (forces between layers within the same node)
-        forces_top_mid_self = self.calc_force_batch(pos_top, pos_mid, self.k2, self.interlayer_distance)
-        forces_mid_low_self = self.calc_force_batch(pos_mid, pos_low, self.k2, self.interlayer_distance)
-
-        # Update accelerations for self-interactions
-        self.accelerations[:, 0, :] += forces_top_mid_self / self.mass
-        self.accelerations[:, 1, :] += (-forces_top_mid_self + forces_mid_low_self) / self.mass
-        self.accelerations[:, 2, :] += -forces_mid_low_self / self.mass
-
-        # Build interaction lists for neighbor interactions
+        return sum(len(s) for s in self.top_boundaries) <= 3 and self.getParticleCount() > 3         
+        
+    @staticmethod
+    def update_accelerations(sim_instance):
+        edges = sim_instance.topology.edges()
         node_indices = []
         neighbor_indices = []
+        for edge in edges:
+            node_indices.append(sim_instance.map_node_config[edge[0]])
+            neighbor_indices.append(sim_instance.map_node_config[edge[1]])
 
-        for edge in self.topology.edges():
-            node_id = edge[0]
-            neighbour_id = edge[1]
-            node_indices.append(self.map_node_config[node_id])
-            neighbor_indices.append(self.map_node_config[neighbour_id])
+        node_indices = np.array(node_indices, dtype=np.int64)
+        neighbor_indices = np.array(neighbor_indices, dtype=np.int64)
 
-        node_indices = np.array(node_indices)
-        neighbor_indices = np.array(neighbor_indices)
-
-        # Positions of interacting pairs
-        pos_node_layers = self.positions[node_indices, :, :]
-        pos_neigh_layers = self.positions[neighbor_indices, :, :]
-
-        # Same-layer forces (k1 interactions)
-        force_top = self.calc_force_batch(pos_node_layers[:, 0, :], pos_neigh_layers[:, 0, :], self.k1, self.lengthEq + 2 * self.delta)
-        force_mid = self.calc_force_batch(pos_node_layers[:, 1, :], pos_neigh_layers[:, 1, :], self.k1, self.lengthEq)
-        force_low = self.calc_force_batch(pos_node_layers[:, 2, :], pos_neigh_layers[:, 2, :], self.k1, self.lengthEq - 2 * self.delta)
-
-        # Cross-layer forces (k3 interactions)
-        force_top_mid = self.calc_force_batch(pos_node_layers[:, 0, :], pos_neigh_layers[:, 1, :], self.k3, self.a12)
-        force_mid_top = self.calc_force_batch(pos_node_layers[:, 1, :], pos_neigh_layers[:, 0, :], self.k3, self.a12)
-        force_mid_low = self.calc_force_batch(pos_node_layers[:, 1, :], pos_neigh_layers[:, 2, :], self.k3, self.a23)
-        force_low_mid = self.calc_force_batch(pos_node_layers[:, 2, :], pos_neigh_layers[:, 1, :], self.k3, self.a23)
-
-        # Update accelerations using np.add.at to handle multiple contributions
-        # Same-layer interactions
-        np.add.at(self.accelerations, (node_indices, 0, slice(None)), force_top / self.mass)
-        np.add.at(self.accelerations, (neighbor_indices, 0, slice(None)), -force_top / self.mass)
-
-        np.add.at(self.accelerations, (node_indices, 1, slice(None)), force_mid / self.mass)
-        np.add.at(self.accelerations, (neighbor_indices, 1, slice(None)), -force_mid / self.mass)
-
-        np.add.at(self.accelerations, (node_indices, 2, slice(None)), force_low / self.mass)
-        np.add.at(self.accelerations, (neighbor_indices, 2, slice(None)), -force_low / self.mass)
-
-        # Cross-layer interactions
-        # Top to mid
-        np.add.at(self.accelerations, (node_indices, 0, slice(None)), force_top_mid / self.mass)
-        np.add.at(self.accelerations, (neighbor_indices, 1, slice(None)), -force_top_mid / self.mass)
-
-        # Mid to top
-        np.add.at(self.accelerations, (node_indices, 1, slice(None)), force_mid_top / self.mass)
-        np.add.at(self.accelerations, (neighbor_indices, 0, slice(None)), -force_mid_top / self.mass)
-
-        # Mid to low
-        np.add.at(self.accelerations, (node_indices, 1, slice(None)), force_mid_low / self.mass)
-        np.add.at(self.accelerations, (neighbor_indices, 2, slice(None)), -force_mid_low / self.mass)
-
-        # Low to mid
-        np.add.at(self.accelerations, (node_indices, 2, slice(None)), force_low_mid / self.mass)
-        np.add.at(self.accelerations, (neighbor_indices, 1, slice(None)), -force_low_mid / self.mass)
+        update_accelerations_jit(
+            sim_instance.positions,
+            sim_instance.accelerations,
+            sim_instance.mass,
+            sim_instance.k1,
+            sim_instance.k2,
+            sim_instance.k3,
+            sim_instance.lengthEq,
+            sim_instance.delta,
+            sim_instance.a12,
+            sim_instance.a23,
+            node_indices,
+            neighbor_indices,
+            sim_instance.interlayer_distance
+        )
 
     def close_pentamer(self, node_id, neighbour_1, neighbour_2):
         # Remove the two edges connected to neighbour_2 from boundary_edges
@@ -772,7 +796,7 @@ class MolecularDynamicsSimulation:
     # Simulation
     def verlet_update(self):
         # Recalculate forces and update accelerations
-        self.update_accelerations()
+        self.update_accelerations(self)
 
         # Update positions using Verlet algorithm
         dt2 = self.dt ** 2
@@ -782,7 +806,7 @@ class MolecularDynamicsSimulation:
 
     def langevin_update(self):
         # Recalculate forces and update accelerations
-        self.update_accelerations()
+        self.update_accelerations(self)
 
         self.positions_old[:] = self.positions.copy()
         self.positions += (self.accelerations * self.mass * self.dt) / self.damping_coeff
