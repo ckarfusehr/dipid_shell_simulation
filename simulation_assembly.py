@@ -15,6 +15,9 @@ import matplotlib.pyplot as plt
 import networkx as nx
 from collections import Counter
 from scipy.spatial import KDTree
+# Set a fixed seed for Python's built-in random
+#random.seed(42)
+#np.random.seed(42)
 
 np.seterr(divide='raise', over='raise', under='raise', invalid='raise')
 
@@ -1105,11 +1108,6 @@ def run_simulation(sim, visualizer, n_steps, add_unit_every, save_every_batch, p
     elif save_what == 'trajectory':
         sim.save_state_trajectory()
 
-    # # Keep the plot open after simulation ends, if visualizer exists
-    # if visualizer is not None:
-    #     plt.ioff()
-    #     plt.show()
-
 def get_sim_params_from_dipid(r, h, alpha_sticky_deg, printout=True):
     angle_sticky_rad = np.radians(alpha_sticky_deg)
     
@@ -1162,7 +1160,7 @@ if __name__ == '__main__':
     MASS = 1
     T_C = 20
     PLOT_OUTER_LAYER = True
-    DT = 0.01
+    DT = 0.2
     METHOD = 'langevin'
     DAMPING_COEFFICIENT = 0.1
     KM = 0.1
