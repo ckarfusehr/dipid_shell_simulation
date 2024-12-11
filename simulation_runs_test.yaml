@@ -1,0 +1,11 @@
+simulations:
+  # Simulations without random placement
+  - random_placement: False
+    random_chance: 0.0
+    repeats: 1
+    alpha_sticky_deg_values:
+      - 14
+      - 12
+      - 10
+      - 8
+      - 6

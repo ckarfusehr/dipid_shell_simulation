@@ -8,14 +8,143 @@ from pathlib import Path
 from datetime import datetime
 import random
 import argparse
+from numba import njit
 
 import matplotlib.pyplot as plt
 
 import networkx as nx
 from collections import Counter
 from scipy.spatial import KDTree
+# Set a fixed seed for Python's built-in random
+#random.seed(42)
+#np.random.seed(42)
 
 np.seterr(divide='raise', over='raise', under='raise', invalid='raise')
+
+
+### Numba functions ###
+@njit
+def update_accelerations_jit(positions, accelerations, mass, k1, k2, k3,
+                            lengthEq, delta, a12, a23,
+                            node_indices, neighbor_indices,
+                            interlayer_distance):
+    accelerations[:] = 0.0
+
+    pos_top = positions[:, 0, :]
+    pos_mid = positions[:, 1, :]
+    pos_low = positions[:, 2, :]
+
+    # Self-interactions
+    forces_top_mid_self = calc_force_batch(pos_top, pos_mid, k2, interlayer_distance)
+    forces_mid_low_self = calc_force_batch(pos_mid, pos_low, k2, interlayer_distance)
+
+    accelerations[:, 0, :] += forces_top_mid_self / mass
+    accelerations[:, 1, :] += (-forces_top_mid_self + forces_mid_low_self) / mass
+    accelerations[:, 2, :] += -forces_mid_low_self / mass
+
+    pos_node_layers = positions[node_indices, :, :]
+    pos_neigh_layers = positions[neighbor_indices, :, :]
+
+    force_top = calc_force_batch(pos_node_layers[:, 0, :], pos_neigh_layers[:, 0, :],
+                                    k1, lengthEq + 2.0 * delta)
+    force_mid = calc_force_batch(pos_node_layers[:, 1, :], pos_neigh_layers[:, 1, :],
+                                    k1, lengthEq)
+    force_low = calc_force_batch(pos_node_layers[:, 2, :], pos_neigh_layers[:, 2, :],
+                                    k1, lengthEq - 2.0 * delta)
+
+    force_top_mid = calc_force_batch(pos_node_layers[:, 0, :], pos_neigh_layers[:, 1, :],
+                                        k3, a12)
+    force_mid_top = calc_force_batch(pos_node_layers[:, 1, :], pos_neigh_layers[:, 0, :],
+                                        k3, a12)
+    force_mid_low = calc_force_batch(pos_node_layers[:, 1, :], pos_neigh_layers[:, 2, :],
+                                        k3, a23)
+    force_low_mid = calc_force_batch(pos_node_layers[:, 2, :], pos_neigh_layers[:, 1, :],
+                                        k3, a23)
+
+    N_pairs = node_indices.shape[0]
+    for i in range(N_pairs):
+        n_idx = node_indices[i]
+        neigh_idx = neighbor_indices[i]
+
+        # Same-layer
+        acc = accelerations
+        acc[n_idx, 0, :] += force_top[i] / mass
+        acc[neigh_idx, 0, :] -= force_top[i] / mass
+
+        acc[n_idx, 1, :] += force_mid[i] / mass
+        acc[neigh_idx, 1, :] -= force_mid[i] / mass
+
+        acc[n_idx, 2, :] += force_low[i] / mass
+        acc[neigh_idx, 2, :] -= force_low[i] / mass
+
+        # Cross-layer
+        acc[n_idx, 0, :] += force_top_mid[i] / mass
+        acc[neigh_idx, 1, :] -= force_top_mid[i] / mass
+
+        acc[n_idx, 1, :] += force_mid_top[i] / mass
+        acc[neigh_idx, 0, :] -= force_mid_top[i] / mass
+
+        acc[n_idx, 1, :] += force_mid_low[i] / mass
+        acc[neigh_idx, 2, :] -= force_mid_low[i] / mass
+
+        acc[n_idx, 2, :] += force_low_mid[i] / mass
+        acc[neigh_idx, 1, :] -= force_low_mid[i] / mass
+        
+@njit
+def calc_force_batch(v_r1_array, v_r2_array, k, a0):
+    v_r12 = v_r1_array - v_r2_array  # Shape: (N, 3)
+    l = np.sqrt((v_r12 * v_r12).sum(axis=1))  # Norm along axis=1
+    
+    # Prevent division by zero
+    mask_zero = (l == 0)
+    l_safe = l.copy()
+    l_safe[mask_zero] = 1.0
+
+    # Normalized directions
+    v_r12_norm = v_r12 / l_safe[:, np.newaxis]
+    # Where l == 0, force is zero
+    v_r12_norm[mask_zero] = 0.0
+
+    # Hooke's law forces
+    stretch = (l - a0)
+    v_f = -k * stretch[:, np.newaxis] * v_r12_norm
+    return v_f
+
+
+@njit
+def simulate_steps_jit(positions, positions_old, velocities, accelerations, 
+                       mass, dt, damping_coeff, method_flag, 
+                       k1, k2, k3, lengthEq, delta, a12, a23, interlayer_distance,
+                       node_indices, neighbor_indices, n_inner_steps):
+    dt2 = dt * dt
+    for _ in range(n_inner_steps):
+        # Update accelerations using already defined update_accelerations_jit
+        update_accelerations_jit(
+            positions,
+            accelerations,
+            mass,
+            k1,
+            k2,
+            k3,
+            lengthEq,
+            delta,
+            a12,
+            a23,
+            node_indices,
+            neighbor_indices,
+            interlayer_distance
+        )
+
+        # Update positions depending on method_flag (0=verlet, 1=langevin)
+        if method_flag == 0:
+            # Verlet
+            positions_new = 2.0 * positions - positions_old + accelerations * dt2
+            positions_old[:] = positions
+            positions[:] = positions_new
+        else:
+            # Langevin
+            positions_old[:] = positions
+            positions[:] = positions + (accelerations * mass * dt) / damping_coeff
 
 class MolecularDynamicsSimulation:
     # Initializations
@@ -37,6 +166,11 @@ class MolecularDynamicsSimulation:
 
         #Simulation parameters
         self.method = method
+        if self.method == 'verlet':
+            self.method_flag = 0
+        else:
+            self.method_flag = 1
+            
         self.dt = np.float64(dt)
         self.T_C = T_C
         self.T_K = T_C + 273.15
@@ -275,19 +409,19 @@ class MolecularDynamicsSimulation:
 
         return angle_degrees
 
-    def calc_force_batch(self, v_r1_array, v_r2_array, k, a0):
-        v_r12 = v_r1_array - v_r2_array  # Shape: (N, 3)
-        l = np.linalg.norm(v_r12, axis=1)  # Shape: (N,)
+    # def calc_force_batch(self, v_r1_array, v_r2_array, k, a0):
+    #     v_r12 = v_r1_array - v_r2_array  # Shape: (N, 3)
+    #     l = np.linalg.norm(v_r12, axis=1)  # Shape: (N,)
 
-        # Prevent division by zero
-        l_safe = np.where(l == 0, 1, l)
+    #     # Prevent division by zero
+    #     l_safe = np.where(l == 0, 1, l)
 
-        v_r12_norm = v_r12 / l_safe[:, np.newaxis]  # Shape: (N, 3)
-        # Adjust force where l == 0 to zero
-        v_r12_norm[l == 0] = 0
+    #     v_r12_norm = v_r12 / l_safe[:, np.newaxis]  # Shape: (N, 3)
+    #     # Adjust force where l == 0 to zero
+    #     v_r12_norm[l == 0] = 0
 
-        v_f = -k * (l - a0)[:, np.newaxis] * v_r12_norm  # Shape: (N, 3)
-        return v_f
+    #     v_f = -k * (l - a0)[:, np.newaxis] * v_r12_norm  # Shape: (N, 3)
+    #     return v_f
     
     def calcTotalEnergy(self):
         totalEnergy = 0
@@ -345,81 +479,35 @@ class MolecularDynamicsSimulation:
 
     # Check if there is still a boundary in the assembly -> if not, the surface must be closed
     def is_closed_surface(self):
-        return sum(len(s) for s in self.top_boundaries) <= 3 and self.getParticleCount() > 3
-
-    def update_accelerations(self):
-        # Reset accelerations
-        self.accelerations.fill(0)  # Shape: (N_nodes, 3, 3)
-
-        # Extract positions for each layer
-        pos_top = self.positions[:, 0, :]  # Shape: (N_nodes, 3)
-        pos_mid = self.positions[:, 1, :]
-        pos_low = self.positions[:, 2, :]
-
-        # Self-interactions (forces between layers within the same node)
-        forces_top_mid_self = self.calc_force_batch(pos_top, pos_mid, self.k2, self.interlayer_distance)
-        forces_mid_low_self = self.calc_force_batch(pos_mid, pos_low, self.k2, self.interlayer_distance)
-
-        # Update accelerations for self-interactions
-        self.accelerations[:, 0, :] += forces_top_mid_self / self.mass
-        self.accelerations[:, 1, :] += (-forces_top_mid_self + forces_mid_low_self) / self.mass
-        self.accelerations[:, 2, :] += -forces_mid_low_self / self.mass
-
-        # Build interaction lists for neighbor interactions
+        return sum(len(s) for s in self.top_boundaries) <= 3 and self.getParticleCount() > 3         
+        
+    @staticmethod
+    def update_accelerations(sim_instance):
+        edges = sim_instance.topology.edges()
         node_indices = []
         neighbor_indices = []
+        for edge in edges:
+            node_indices.append(sim_instance.map_node_config[edge[0]])
+            neighbor_indices.append(sim_instance.map_node_config[edge[1]])
 
-        for edge in self.topology.edges():
-            node_id = edge[0]
-            neighbour_id = edge[1]
-            node_indices.append(self.map_node_config[node_id])
-            neighbor_indices.append(self.map_node_config[neighbour_id])
+        node_indices = np.array(node_indices, dtype=np.int64)
+        neighbor_indices = np.array(neighbor_indices, dtype=np.int64)
 
-        node_indices = np.array(node_indices)
-        neighbor_indices = np.array(neighbor_indices)
-
-        # Positions of interacting pairs
-        pos_node_layers = self.positions[node_indices, :, :]
-        pos_neigh_layers = self.positions[neighbor_indices, :, :]
-
-        # Same-layer forces (k1 interactions)
-        force_top = self.calc_force_batch(pos_node_layers[:, 0, :], pos_neigh_layers[:, 0, :], self.k1, self.lengthEq + 2 * self.delta)
-        force_mid = self.calc_force_batch(pos_node_layers[:, 1, :], pos_neigh_layers[:, 1, :], self.k1, self.lengthEq)
-        force_low = self.calc_force_batch(pos_node_layers[:, 2, :], pos_neigh_layers[:, 2, :], self.k1, self.lengthEq - 2 * self.delta)
-
-        # Cross-layer forces (k3 interactions)
-        force_top_mid = self.calc_force_batch(pos_node_layers[:, 0, :], pos_neigh_layers[:, 1, :], self.k3, self.a12)
-        force_mid_top = self.calc_force_batch(pos_node_layers[:, 1, :], pos_neigh_layers[:, 0, :], self.k3, self.a12)
-        force_mid_low = self.calc_force_batch(pos_node_layers[:, 1, :], pos_neigh_layers[:, 2, :], self.k3, self.a23)
-        force_low_mid = self.calc_force_batch(pos_node_layers[:, 2, :], pos_neigh_layers[:, 1, :], self.k3, self.a23)
-
-        # Update accelerations using np.add.at to handle multiple contributions
-        # Same-layer interactions
-        np.add.at(self.accelerations, (node_indices, 0, slice(None)), force_top / self.mass)
-        np.add.at(self.accelerations, (neighbor_indices, 0, slice(None)), -force_top / self.mass)
-
-        np.add.at(self.accelerations, (node_indices, 1, slice(None)), force_mid / self.mass)
-        np.add.at(self.accelerations, (neighbor_indices, 1, slice(None)), -force_mid / self.mass)
-
-        np.add.at(self.accelerations, (node_indices, 2, slice(None)), force_low / self.mass)
-        np.add.at(self.accelerations, (neighbor_indices, 2, slice(None)), -force_low / self.mass)
-
-        # Cross-layer interactions
-        # Top to mid
-        np.add.at(self.accelerations, (node_indices, 0, slice(None)), force_top_mid / self.mass)
-        np.add.at(self.accelerations, (neighbor_indices, 1, slice(None)), -force_top_mid / self.mass)
-
-        # Mid to top
-        np.add.at(self.accelerations, (node_indices, 1, slice(None)), force_mid_top / self.mass)
-        np.add.at(self.accelerations, (neighbor_indices, 0, slice(None)), -force_mid_top / self.mass)
-
-        # Mid to low
-        np.add.at(self.accelerations, (node_indices, 1, slice(None)), force_mid_low / self.mass)
-        np.add.at(self.accelerations, (neighbor_indices, 2, slice(None)), -force_mid_low / self.mass)
-
-        # Low to mid
-        np.add.at(self.accelerations, (node_indices, 2, slice(None)), force_low_mid / self.mass)
-        np.add.at(self.accelerations, (neighbor_indices, 1, slice(None)), -force_low_mid / self.mass)
+        update_accelerations_jit(
+            sim_instance.positions,
+            sim_instance.accelerations,
+            sim_instance.mass,
+            sim_instance.k1,
+            sim_instance.k2,
+            sim_instance.k3,
+            sim_instance.lengthEq,
+            sim_instance.delta,
+            sim_instance.a12,
+            sim_instance.a23,
+            node_indices,
+            neighbor_indices,
+            sim_instance.interlayer_distance
+        )
 
     def close_pentamer(self, node_id, neighbour_1, neighbour_2):
         # Remove the two edges connected to neighbour_2 from boundary_edges
@@ -554,10 +642,8 @@ class MolecularDynamicsSimulation:
                 
         self.map_node_config = map_new
 
-    def check_closure_event(self, min_topo_dist=5, max_physical_dist=0.8, check_interval=50, current_step=0):
-        # Perform check only at specified intervals
-        if current_step % check_interval != 0:
-            return
+    def check_closure_event(self, min_topo_dist=5, max_physical_dist=0.8):
+        closure_occurred = False
 
         self.cleanup_map_node_config()
 
@@ -605,8 +691,8 @@ class MolecularDynamicsSimulation:
                         self.remove_particle(other_node)
                         
                         self.top_boundaries = self.decompose_boundary(node)
-
-                        return 
+                        closure_occurred = True
+                        return closure_occurred
 
     def decompose_boundary(self, start_node):
         # Normalize edges to sorted tuples for consistency
@@ -750,7 +836,7 @@ class MolecularDynamicsSimulation:
     # Simulation
     def verlet_update(self):
         # Recalculate forces and update accelerations
-        self.update_accelerations()
+        self.update_accelerations(self)
 
         # Update positions using Verlet algorithm
         dt2 = self.dt ** 2
@@ -760,7 +846,7 @@ class MolecularDynamicsSimulation:
 
     def langevin_update(self):
         # Recalculate forces and update accelerations
-        self.update_accelerations()
+        self.update_accelerations(self)
 
         self.positions_old[:] = self.positions.copy()
         self.positions += (self.accelerations * self.mass * self.dt) / self.damping_coeff
@@ -913,85 +999,114 @@ class SimulationVisualizer:
         plt.pause(0.1)
 
 # Main simulation loop
-def run_simulation(sim, visualizer, n_steps, add_unit_every, save_every, plot_every, save_what, n_steps_equilibrate = 5000, max_degree=12):
+
+def run_simulation(sim, visualizer, n_steps, add_unit_every, save_every_batch, plot_every_batch, save_what, max_degree=12):
     start_time = time.time()
-    for step in range(n_steps):
-        # User closes visualizer -> save current state and stop simulation
-        if visualizer is not None and visualizer.stop_simulation:
-            print('Simulation stopped by user.')
-            if save_what == 'simulation':
-                sim.save_state_simulation()
-            elif save_what == 'trajectory':
-                sim.save_state_trajectory()
-            break
-        
-        # Checkpoint (state) is saved after every save_every steps
-        if step != 0 and step % save_every == 0:
+    batch_size = add_unit_every  # batch_size defined as add_unit_every
+    n_batches = n_steps // batch_size
+    remainder = n_steps % batch_size
+
+    for batch_idx in range(n_batches):
+        # Save state if needed (skip the first batch to avoid saving at step=0)
+        if batch_idx != 0 and batch_idx % save_every_batch == 0:
             if save_what == 'simulation':
                 sim.save_state_simulation()
             elif save_what == 'trajectory':
                 sim.save_state_trajectory()
 
-        # If assembly self-closed -> save simulation, print statistics and stop
+        # If the surface is closed, wrap-up sim
         if sim.is_closed_surface():
-            for i in range(n_steps_equilibrate):
+            for i in range(add_unit_every):
                 sim.simulate_step()
-            
             if visualizer is not None:
                 visualizer.update_plot()
-                
             if save_what == 'simulation':
                 sim.save_state_simulation()
             elif save_what == 'trajectory':
                 sim.save_state_trajectory()
-            
+
             total_time = time.time() - start_time
-            hours, remainder = divmod(total_time, 3600)
-            minutes, seconds = divmod(remainder, 60)
-
-            print(f'SIMULATION FINISHED')
-            print(f'Statistics:')
-            print(f'{step} steps were simulated in {int(hours)} hours {int(minutes)} minutes {int(seconds)} seconds.')
-
+            hours, remainder_time = divmod(total_time, 3600)
+            minutes, seconds = divmod(remainder_time, 60)
+            print('SIMULATION FINISHED')
+            steps_done = batch_idx * batch_size
+            print(f'{steps_done} steps were simulated in {int(hours)} hours {int(minutes)} minutes {int(seconds)} seconds.')
             num_particles = sim.getParticleCount()
             print(f'{num_particles} nodes were added.')
-            
             degree_distribution = sim.getNodeStatistics()
             for degree, count in degree_distribution.items():
                 print(f'NODES OF DEGREE {degree} = {count}')
-            
-            break
+                
+            if visualizer is not None:
+                plt.ioff()
+                plt.show()
+            return
+
+        # Do closure event check before each batch
+        closure_occurred = sim.check_closure_event(min_topo_dist=5, max_physical_dist=0.5)
         
-        # Add new node to assembly after add_unit_every steps
-        if step != 0 and step % add_unit_every == 0:
+        # Add unit if no closure occurred
+        if batch_idx != 0 and not closure_occurred:
             sim.next_position()
 
-        # Plot the assembly after every plot_every steps
-        if step % plot_every == 0 and visualizer is not None:
-            visualizer.update_plot()
-            #print(f'E_total = {sim.calcTotalEnergy()}')
+        # Build node/neighbor arrays
+        node_indices = []
+        neighbor_indices = []
+        for edge in sim.topology.edges():
+            node_indices.append(sim.map_node_config[edge[0]])
+            neighbor_indices.append(sim.map_node_config[edge[1]])
+        node_indices = np.array(node_indices, dtype=np.int64)
+        neighbor_indices = np.array(neighbor_indices, dtype=np.int64)
 
-        # Simulate one step
-        sim.simulate_step()
-        # Check if two nodes are close enough for merging event of far apart surfaces
-        sim.check_closure_event(min_topo_dist=5, max_physical_dist=0.5, check_interval=50, current_step=step)
-        if (step % 250 == 0):
-            # If the first half shell closes there is a triangular boundary -> remove it so assembly does not
-            # continue adding nodes at this boundary
-            sim.remove_minimal_cycles()
-            # Check if simulation fails by infinitely adding edges to a node -> if yes, stop simulation
+        # Run a batch of steps in numba-jitted loop
+        simulate_steps_jit(sim.positions,
+                           sim.positions_old,
+                           sim.velocities,
+                           sim.accelerations,
+                           sim.mass,
+                           sim.dt,
+                           sim.damping_coeff,
+                           sim.method_flag,
+                           sim.k1,
+                           sim.k2,
+                           sim.k3,
+                           sim.lengthEq,
+                           sim.delta,
+                           sim.a12,
+                           sim.a23,
+                           sim.interlayer_distance,
+                           node_indices,
+                           neighbor_indices,
+                           batch_size)
+
+        # Remove minimal cycles every batch
+        sim.remove_minimal_cycles()
+        # Check degree overload every 10 batches
+        if batch_idx % 10 == 0:
             if sim.check_degree_overload(max_degree):
                 print(f'Node degree overload encountered (DEGREE >= {max_degree}). Aborting simulation.')
                 degree_distribution = sim.getNodeStatistics()
                 for degree, count in degree_distribution.items():
                     print(f'NODES OF DEGREE {degree} = {count}')
-                    
-                break
+                if visualizer is not None:
+                    plt.ioff()
+                    plt.show()
+                return
 
-    # Keep the plot open after simulation ends, if visualizer exists
-    if visualizer is not None: # in batch mode, visualizer is None
-        plt.ioff()
-        plt.show()
+        # Plot if needed
+        if batch_idx % plot_every_batch == 0 and visualizer is not None:
+            visualizer.update_plot()
+            
+    # Wrap up remaining simulation steps
+    if remainder > 0:
+        for i in range(remainder):
+            sim.simulate_step()
+                
+    # Save final state if needed
+    if save_what == 'simulation':
+        sim.save_state_simulation()
+    elif save_what == 'trajectory':
+        sim.save_state_trajectory()
 
 def get_sim_params_from_dipid(r, h, alpha_sticky_deg, printout=True):
     angle_sticky_rad = np.radians(alpha_sticky_deg)
@@ -1001,7 +1116,7 @@ def get_sim_params_from_dipid(r, h, alpha_sticky_deg, printout=True):
     a_0 = 2*(r*np.cos(angle_sticky_rad) + l_T)
     r_container = a_0/(2*np.sin(angle_sticky_rad))
     a_2 = 2*(r_container - h)*np.sin(angle_sticky_rad)
-    
+
     a_eq = (a_0 + a_2)/2
     delta_eq = (a_0 - a_2)/4
     interlayer_distance = h/2
@@ -1029,12 +1144,13 @@ if __name__ == '__main__':
     # Parse command-line arguments
     parser = argparse.ArgumentParser(description="Run molecular dynamics simulation with specified parameters.")
     parser.add_argument('--alpha_sticky_deg', type=float, default=15, help="Alpha sticky degree (default: 15)")
-    parser.add_argument('--save_every', type=int, default=250, help="Steps interval to save simulation state (default: 250)")
-    parser.add_argument('--plot_every', type=int, default=250, help="Steps interval to plot simulation state (default: 250)")
+    parser.add_argument('--save_every_batch', type=int, default=1, help="Steps interval to save simulation state (default: 250)")
+    parser.add_argument('--plot_every_batch', type=int, default=1, help="Steps interval to plot simulation state (default: 250)")
     parser.add_argument('--n_steps', type=int, default=10000000, help="Total number of simulation steps (default: 10000000)")
     parser.add_argument('--batch_mode', action='store_true', help="Run simulation in batch mode without plotting")
     parser.add_argument('--random_placement', action='store_true', help="Place monomers randomly with random_chance")
     parser.add_argument('--random_chance', type=float, default=0.005, help="Chance of randomly placing a monomer")
+    parser.add_argument('--add_unit_every', type=int, default=4000, help="Chance of randomly placing a monomer")
 
 
     args = parser.parse_args()
@@ -1044,13 +1160,13 @@ if __name__ == '__main__':
     MASS = 1
     T_C = 20
     PLOT_OUTER_LAYER = True
-    DT = 0.01
+    DT = 0.2
     METHOD = 'langevin'
     DAMPING_COEFFICIENT = 0.1
     KM = 0.1
     
     # VARIABLE SIMULATION PARAMETERS
-    random_placement = args.random_placement
+    random_placement = False #args.random_placement
     random_chance = args.random_chance
 
     # DIPID PARAMETERS
@@ -1095,12 +1211,12 @@ if __name__ == '__main__':
         visualizer = None  # No visualizer in batch mode
 
     n_steps = args.n_steps
-    add_unit_every = 1000
-    save_every = args.save_every
-    plot_every = args.plot_every
+    add_unit_every = args.add_unit_every
+    save_every_batch = args.save_every_batch
+    plot_every_batch = args.plot_every_batch
 
     try:
-        run_simulation(sim, visualizer, n_steps, add_unit_every, save_every, plot_every, 'simulation')
+        run_simulation(sim, visualizer, n_steps, add_unit_every, save_every_batch, plot_every_batch, 'simulation')
     except Exception as e:
         print(f"An error occurred: {e}")
         traceback.print_exc()
