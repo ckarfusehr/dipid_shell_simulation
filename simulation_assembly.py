@@ -15,6 +15,8 @@ import matplotlib.pyplot as plt
 import networkx as nx
 from collections import Counter
 from scipy.spatial import KDTree
+
+#nx.config.cache_converted_graphs = False
 # Set a fixed seed for Python's built-in random
 #random.seed(42)
 #np.random.seed(42)
