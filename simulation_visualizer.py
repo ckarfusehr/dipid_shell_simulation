@@ -9,23 +9,22 @@ from matplotlib.animation import FuncAnimation
 import networkx as nx
 from scipy.spatial import KDTree
 from simulation_assembly import MolecularDynamicsSimulation
+import argparse
 
 class SimulationAnimator:
-    def __init__(self, sim_instance, scaling=1, plot_outer_layer=True, loop=False):
+    def __init__(self, sim_instance, scaling=1, plot_outer_layer=True, loop=False, last_frame_only=False):
         self.sim_instance = sim_instance
         self.plot_outer_layer = plot_outer_layer
         self.scaling = scaling
         self.loop = loop
+        self.last_frame_only = last_frame_only
         self.state_trajectory = sim_instance.state_trajectory
         self.fig = plt.figure()
         self.ax = self.fig.add_subplot(111, projection='3d')
         self.ax.set_box_aspect([1, 1, 1])
-        # Initialize other necessary attributes
-        # Initialize the animation
         self.initialize_animation()
 
     def initialize_animation(self):
-        # Set labels and title
         if self.scaling == 1:
             self.ax.set_xlabel('x')
             self.ax.set_ylabel('y')
@@ -36,34 +35,32 @@ class SimulationAnimator:
             self.ax.set_zlabel('Z (nm)')
         self.ax.set_title('Capsid Assembly Simulation')
 
-        # Initialize scatter plot
         self.scatter = self.ax.scatter([], [], [], s=20, label='Particles')
-        # Initialize edge lines
-        # Compute maximum number of edges to allocate line objects
         max_edges = max(len(state['topology'].edges()) for state in self.state_trajectory)
         self.edge_lines = []
         for _ in range(max_edges * (1 if self.plot_outer_layer else 3)):
-            line, = self.ax.plot([], [], [], color='black')
+            line, = self.ax.plot([], [], [], color='black', alpha=0.3)  # Set alpha for transparency
             self.edge_lines.append(line)
         
-        # Animation control flags
         self.anim_running = True
         self.current_frame = 0
-
-        # Set up key event handlers
         self.fig.canvas.mpl_connect('key_press_event', self.on_key_press)
 
-        # Create a timer explicitly
-        self.timer = self.fig.canvas.new_timer(interval=20)
-        self.timer.add_callback(self._update_animation)
-
-        # Create the animation with the explicit timer
-        self.animation = FuncAnimation(self.fig, self.update, frames=len(self.state_trajectory), 
-                                       interval=5, blit=False, repeat=self.loop, event_source=self.timer)
-        self.timer.start()
-        plt.show()
+        if self.last_frame_only:
+            self.current_frame = len(self.state_trajectory) - 1
+            self.update(self.current_frame)
+            plt.show()
+        else:
+            self.timer = self.fig.canvas.new_timer(interval=20)
+            self.timer.add_callback(self._update_animation)
+            self.animation = FuncAnimation(self.fig, self.update, frames=len(self.state_trajectory), 
+                                           interval=5, blit=False, repeat=self.loop, event_source=self.timer)
+            self.timer.start()
+            plt.show()
 
     def on_key_press(self, event):
+        if self.last_frame_only:
+            return
         if event.key == ' ':
             self.toggle_animation()
         elif event.key == 'left':
@@ -90,7 +87,6 @@ class SimulationAnimator:
         positions = state['positions']
         topology = state['topology']
         
-        # Reconstruct node_id_map
         node_ids = sorted(topology.nodes())
         node_id_map = {node_id: idx for idx, node_id in enumerate(node_ids)}
         
@@ -103,39 +99,41 @@ class SimulationAnimator:
         ys = vectors[:, 1]*self.scaling
         zs = vectors[:, 2]*self.scaling
         
-        # Colors based on node degree
         node_degrees = dict(topology.degree())
-        colors = []
         
+        # Coloring:
+        # 5-fold nodes: red with full opacity
+        # 6-fold nodes: gray with alpha=0.1
+        # all other degrees: blue with full opacity
+        colors = []
         if self.plot_outer_layer:
-            for idx, node_id in enumerate(node_ids):
+            for node_id in node_ids:
                 degree = node_degrees.get(node_id, 0)
                 if degree == 5:
-                    colors.append('red')
+                    colors.append((1, 0, 0, 1))      # red
                 elif degree == 6:
-                    colors.append('blue')
+                    colors.append((0.5, 0.5, 0.5, 0.1))  # gray with alpha
                 else:
-                    colors.append('gray')
+                    colors.append((0, 0, 1, 1))      # blue
         else:
-            for _, node_id in enumerate(node_ids):
+            for node_id in node_ids:
                 degree = node_degrees.get(node_id, 0)
-                for _ in range(3):
-                    if degree == 5:
-                        colors.append('red')
-                    elif degree == 6:
-                        colors.append('blue')
-                    else:
-                        colors.append('gray')
+                if degree == 5:
+                    c = (1, 0, 0, 1)
+                elif degree == 6:
+                    c = (0.5, 0.5, 0.5, 0.1)
+                else:
+                    c = (0, 0, 1, 1)
+                # Repeat for each sub-layer
+                colors.extend([c, c, c])
         
         self.scatter._offsets3d = (xs, ys, zs)
         self.scatter.set_color(colors)
         
-        # Clear previous edges
         for line in self.edge_lines:
             line.set_data([], [])
             line.set_3d_properties([])
         
-        # Update edges
         current_edges = list(topology.edges())
         edge_count = 0
         for edge in current_edges:
@@ -155,13 +153,11 @@ class SimulationAnimator:
                 line.set_3d_properties([pos1[2], pos2[2]])
                 edge_count += 1
         
-        # Hide unused edge lines
         for i in range(edge_count, len(self.edge_lines)):
             line = self.edge_lines[i]
             line.set_data([], [])
             line.set_3d_properties([])
         
-        # Adjust plot limits
         margin = 0
         x_min, x_max = min(xs) - margin, max(xs) + margin
         y_min, y_max = min(ys) - margin, max(ys) + margin
@@ -175,31 +171,28 @@ class SimulationAnimator:
         self.ax.set_zlim(z_center - max_range / 2, z_center + max_range / 2)
         plt.draw()
         return self.scatter, *self.edge_lines
-    
-if __name__ == '__main__':
-    # Load and animate the trajectory
-    filename = './Simulation/simulations/20241209112658_sim_langevin_dt0.01_delta0.024688272691943597_km1_TC20_damping0.1_random0.0.pkl'
-    cd = Path().resolve()
-    filepath = cd / filename
 
+if __name__ == '__main__':
+    parser = argparse.ArgumentParser(description="Animate a molecular dynamics simulation.")
+    parser.add_argument('filepath', type=str, help="Path to the simulation state file.")
+    parser.add_argument('--last-frame', action='store_true', help="Show only the last frame.")
+    args = parser.parse_args()
+
+    filepath = Path(args.filepath).resolve()
     sim_instance = MolecularDynamicsSimulation.load_state(filepath)
     sim_instance.state_trajectory = sim_instance.state_trajectory[-50:]
-    
     scaling_factor = sim_instance.monomer_info['scaling']
 
-    animator = SimulationAnimator(sim_instance, scaling=scaling_factor, plot_outer_layer=True, loop=False)
+    animator = SimulationAnimator(sim_instance, scaling=scaling_factor, plot_outer_layer=True, loop=False, last_frame_only=args.last_frame)
 
-    # Print node degrees at the last frame
     last_state = sim_instance.state_trajectory[-1]
     topology = last_state['topology']
-
     degree_array = np.zeros(8, dtype=int)
     for node in topology.nodes():
         degree = topology.degree(node)
         if degree < len(degree_array):
             degree_array[degree] += 1
         else:
-            # Extend the array if necessary
             degree_array = np.resize(degree_array, degree + 1)
             degree_array[degree] = 1
 
