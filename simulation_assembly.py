@@ -148,10 +148,10 @@ def simulate_steps_jit(positions, positions_old, velocities, accelerations,
 
 class MolecularDynamicsSimulation:
     # Initializations
-    def __init__(self, dt, mass, lengthEq, delta, km, interlayer_distance=None, T_C=20, origin=np.zeros(3), method='langevin', damping_coeff=1, random_placement = False, random_chance = 0, monomer_info=None, batch_mode=False):
+    def __init__(self, dt, mass, lengthEq, delta, km, interlayer_distance=None, T_C=20, origin=np.zeros(3), method='langevin', damping_coeff=1, random_placement = False, random_chance = 0, monomer_info=None, batch_mode=False,alpha_deg=None,add_unit_every=None):
         #Filename generation
         str_datetime = datetime.now().strftime("%Y%m%d%H%M%S")
-        filename = './simulations/' + str_datetime + '_sim_' + method + "_dt" + str(dt) + "_delta" + str(delta) + "_km" + str(km)+'_TC' + str(T_C)
+        filename = './simulations/' + str_datetime + '_sim_' + method + "_dt" + str(dt) + "_a" + str(alpha_deg) + "_delta" + str(delta) + "_km" + str(km)+'_TC' + str(T_C) + "_Bsize" + str(add_unit_every)
         if method == 'langevin':
             filename += "_damping" + str(damping_coeff)
         if random_placement:
@@ -1202,7 +1202,10 @@ if __name__ == '__main__':
         random_placement=random_placement,
         random_chance=random_chance,
         monomer_info=MONOMER_INFO,
-        batch_mode=batch_mode
+        batch_mode=batch_mode,
+        alpha_deg=alpha_deg,
+        add_unit_every=args.add_unit_every
+        
     )
     
     if not args.batch_mode:
