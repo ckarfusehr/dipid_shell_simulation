@@ -6,7 +6,7 @@ import yaml
 def run_simulation_subprocess(alpha_sticky_deg_value, n_steps, save_every_batch, plot_every_batch, random_placement, random_chance, add_unit_every, batch_mode=True):
     # Build the command to run your simulation script with arguments
     command = [
-        'python', 'simulation_assembly.py',  # Replace with your actual script name,
+        'python', 'simulation_assembly_langevin_update.py',  # Replace with your actual script name,
         '--alpha_sticky_deg', str(alpha_sticky_deg_value),
         '--n_steps', str(n_steps),
         '--save_every_batch', str(save_every_batch),
@@ -29,7 +29,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='Run multiple simulations based on configuration file.')
     parser.add_argument('--config_file', type=str, default='simulation_config.yaml', help='Path to the configuration file')
     parser.add_argument('--n_steps', type=int, default=1000000000, help='Number of steps for each simulation (default: 10000000)')
-    parser.add_argument('--max_concurrent', type=int, default=5, help='Maximum number of concurrent simulations (default: 5)')
+    parser.add_argument('--max_concurrent', type=int, default=20, help='Maximum number of concurrent simulations (default: 5)')
     parser.add_argument('--save_every_batch', type=int, default=50, help='Frequency to save simulation (default: 20)')
     parser.add_argument('--plot_every_batch', type=int, default=100, help='Frequency to plot simulation (default: 20)')
     parser.add_argument('--add_unit_every', type=int, default=20000, help="Chance of randomly placing a monomer")
