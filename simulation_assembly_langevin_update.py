@@ -17,17 +17,13 @@ import networkx as nx
 from collections import Counter
 from scipy.spatial import KDTree
 
-#nx.config.cache_converted_graphs = False
+nx.config.cache_converted_graphs = False
 # Set a fixed seed for Python's built-in random
-random.seed(78923486)
-np.random.seed(78923486)
+#random.seed(78923486)
+#np.random.seed(78923486)
 
 np.seterr(divide='raise', over='raise', under='raise', invalid='raise')
 
-
-### Numba functions ###
-import numpy as np
-#from numba import njit, prange
 
 # Assume k_B_T is given (e.g. k_B*T). If not needed, set k_B_T = 0.0.
 k_B_T = 0.0  # set to a nonzero value for thermal noise
@@ -481,7 +477,7 @@ class MolecularDynamicsSimulation:
         angle_degrees = np.degrees(angle)
 
         return angle_degrees
-
+    #################################### Debugging #############################
     # def calc_force_batch(self, v_r1_array, v_r2_array, k, a0):
     #     v_r12 = v_r1_array - v_r2_array  # Shape: (N, 3)
     #     l = np.linalg.norm(v_r12, axis=1)  # Shape: (N,)
@@ -495,6 +491,77 @@ class MolecularDynamicsSimulation:
 
     #     v_f = -k * (l - a0)[:, np.newaxis] * v_r12_norm  # Shape: (N, 3)
     #     return v_f
+    
+    # def calcTotalEnergy(self):
+    #     totalEnergy = 0
+
+    #     # Build interaction lists for neighbor interactions
+    #     node_indices = []
+    #     neighbor_indices = []
+
+    #     for edge in self.topology.edges():
+    #         node_id = edge[0]
+    #         neighbour_id = edge[1]
+    #         node_indices.append(self.map_node_config[node_id])
+    #         neighbor_indices.append(self.map_node_config[neighbour_id])
+
+    #     node_indices = np.array(node_indices)
+    #     neighbor_indices = np.array(neighbor_indices)
+
+    #     # Positions of interacting pairs
+    #     pos_node_layers = self.positions[node_indices, :, :]  # Shape: (N_pairs, 3, 3)
+    #     pos_neigh_layers = self.positions[neighbor_indices, :, :]
+
+    #     # Same-layer potential energy (k1 interactions)
+    #     energy_top = 0.5 * self.k1 * (np.linalg.norm(pos_node_layers[:, 0, :] - pos_neigh_layers[:, 0, :], axis=1) -
+    #                                 (self.lengthEq + 2 * self.delta)) ** 2
+    #     energy_mid = 0.5 * self.k1 * (np.linalg.norm(pos_node_layers[:, 1, :] - pos_neigh_layers[:, 1, :], axis=1) -
+    #                                 self.lengthEq) ** 2
+    #     energy_low = 0.5 * self.k1 * (np.linalg.norm(pos_node_layers[:, 2, :] - pos_neigh_layers[:, 2, :], axis=1) -
+    #                                 (self.lengthEq - 2 * self.delta)) ** 2
+
+    #     # Cross-layer potential energy (k3 interactions)
+    #     energy_top_mid = 0.5 * self.k3 * (np.linalg.norm(pos_node_layers[:, 0, :] - pos_neigh_layers[:, 1, :], axis=1) -
+    #                                     self.a12) ** 2
+    #     energy_mid_top = 0.5 * self.k3 * (np.linalg.norm(pos_node_layers[:, 1, :] - pos_neigh_layers[:, 0, :], axis=1) -
+    #                                     self.a12) ** 2
+    #     energy_mid_low = 0.5 * self.k3 * (np.linalg.norm(pos_node_layers[:, 1, :] - pos_neigh_layers[:, 2, :], axis=1) -
+    #                                     self.a23) ** 2
+    #     energy_low_mid = 0.5 * self.k3 * (np.linalg.norm(pos_node_layers[:, 2, :] - pos_neigh_layers[:, 1, :], axis=1) -
+    #                                     self.a23) ** 2
+
+    #     # Sum same-layer and cross-layer energies
+    #     energy_interactions = energy_top + energy_mid + energy_low + energy_top_mid + energy_mid_top + energy_mid_low + energy_low_mid
+    #     totalEnergy += np.sum(energy_interactions)
+
+    #     # Self-interactions (forces between layers within the same node)
+    #     pos_top = self.positions[:, 0, :]  # Shape: (N_nodes, 3)
+    #     pos_mid = self.positions[:, 1, :]
+    #     pos_low = self.positions[:, 2, :]
+
+    #     energy_top_mid_self = 0.5 * self.k2 * (np.linalg.norm(pos_top - pos_mid, axis=1) - self.interlayer_distance) ** 2
+    #     energy_mid_low_self = 0.5 * self.k2 * (np.linalg.norm(pos_mid - pos_low, axis=1) - self.interlayer_distance) ** 2
+
+    #     # Sum self-interaction energies
+    #     energy_self = energy_top_mid_self + energy_mid_low_self
+    #     totalEnergy += np.sum(energy_self)
+
+    #     # Debugging: Print all energy components
+    #     print("----- Energy Breakdown -----")
+    #     print(f"Energy Top (k1): {np.sum(energy_top):.4f}")
+    #     print(f"Energy Mid (k1): {np.sum(energy_mid):.4f}")
+    #     print(f"Energy Low (k1): {np.sum(energy_low):.4f}")
+    #     print(f"Energy Top-Mid (k3): {np.sum(energy_top_mid):.4f}")
+    #     print(f"Energy Mid-Top (k3): {np.sum(energy_mid_top):.4f}")
+    #     print(f"Energy Mid-Low (k3): {np.sum(energy_mid_low):.4f}")
+    #     print(f"Energy Low-Mid (k3): {np.sum(energy_low_mid):.4f}")
+    #     print(f"Energy Self Top-Mid (k2): {np.sum(energy_top_mid_self):.4f}")
+    #     print(f"Energy Self Mid-Low (k2): {np.sum(energy_mid_low_self):.4f}")
+    #     print(f"Total Energy: {totalEnergy:.4f}")
+    #     print("-----------------------------\n")
+
+    #     return totalEnergy
+
     
     def calcTotalEnergy(self):
         totalEnergy = 0
@@ -1073,12 +1140,12 @@ class SimulationVisualizer:
 
 # Main simulation loop
 
-def run_simulation(sim, visualizer, n_steps, add_unit_every, save_every_batch, plot_every_batch, save_what, max_degree=12,equilibrium_threshold=1e-6):
+def run_simulation(sim, visualizer, n_steps, add_unit_every, save_every_batch, plot_every_batch, save_what, max_degree=12,equilibrium_threshold=1e-6, equilibrium_threshold_absolute=1e-12):
     start_time = time.time()
     batch_size = add_unit_every
     n_batches = n_steps // batch_size
     remainder = n_steps % batch_size
-    n_rounds = 0
+    #n_rounds = 0
 
     # Parameters for equilibration
     equil_window_size = batch_size  # for example, 2000 steps
@@ -1141,7 +1208,8 @@ def run_simulation(sim, visualizer, n_steps, add_unit_every, save_every_batch, p
         equilibrated = False
 
         while not equilibrated:
-            energy_old = sim.calcTotalEnergy()
+            #energy_old = sim.calcTotalEnergy()
+            energy_per_node_old = sim.calcTotalEnergy() / sim.getParticleCount()
             # Run a batch of equilibrium steps
             simulate_steps_jit(sim.positions,
                             sim.positions_old,
@@ -1163,42 +1231,39 @@ def run_simulation(sim, visualizer, n_steps, add_unit_every, save_every_batch, p
                             neighbor_indices,
                             equil_window_size)
 
-            # Compute energy per node
-            energy_new = sim.calcTotalEnergy()
+            # # Compute energy per node
+            # energy_new = sim.calcTotalEnergy()
 
-            drift = abs(energy_new - energy_old)
-            if drift <= equilibrium_threshold * abs(energy_old):
+            # drift = abs(energy_new - energy_old)
+            # if drift <= equilibrium_threshold * abs(energy_old):
+            #     equilibrated = True
+            #     #energy_per_node_new = sim.calcTotalEnergy() / sim.getParticleCount()
+            #     print(f"pass after n_rounds: {n_rounds}\n with energy: {energy_new}, drif: {drift}")# energypn: {energy_per_node_new}")
+            #     n_rounds = 0
+            # else:
+            #     n_rounds += 1
+            #     energy_old = energy_new
+            #     print(f"NOT pass after n_rounds: {n_rounds}\n with energy: {energy_new}, drif: {drift}")
+
+            # Compute energy per node
+            energy_per_node_new = sim.calcTotalEnergy() / sim.getParticleCount()
+
+            drift = abs(energy_per_node_new - energy_per_node_old)
+            if drift <= equilibrium_threshold * abs(energy_per_node_old) or drift < equilibrium_threshold_absolute:
                 equilibrated = True
-                #energy_per_node_new = sim.calcTotalEnergy() / sim.getParticleCount()
-                print(f"pass after n_rounds: {n_rounds}\n with energy: {energy_new}, drif: {drift}")# energypn: {energy_per_node_new}")
+                #print(f"pass after n_rounds: {n_rounds}\n with energy: {energy_per_node_new}, drif: {drift}")
                 n_rounds = 0
             else:
                 n_rounds += 1
-                energy_old = energy_new
+                energy_per_node_old = energy_per_node_new
                 #print(f"NOT pass after n_rounds: {n_rounds}\n with energy: {energy_per_node_new}, drif: {drift}")
-
-            # # Compute energy per node
-            # energy_per_node_new = sim.calcTotalEnergy() / sim.getParticleCount()
-
-            # if energy_per_node_old is not None:
-            #     drift = abs(energy_per_node_new - energy_per_node_old)
-            #     if drift <= equilibrium_threshold * abs(energy_per_node_old):
-            #         equilibrated = True
-            #         print(f"pass after n_rounds: {n_rounds}\n with energy: {energy_per_node_new}, drif: {drift}")
-            #         n_rounds = 0
-            #     else:
-            #         n_rounds += 1
-            #         energy_per_node_old = energy_per_node_new
-            #         #print(f"NOT pass after n_rounds: {n_rounds}\n with energy: {energy_per_node_new}, drif: {drift}")
-            # else:
-            #     energy_per_node_old = energy_per_node_new
 
         # Post-equilibration checks
         sim.remove_minimal_cycles()
 
         if batch_idx % 10 == 0:
             if sim.check_degree_overload(max_degree):
-                print(f'Node degree overload encountered (DEGREE >= {max_degree}). Aborting simulation.')
+                #print(f'Node degree overload encountered (DEGREE >= {max_degree}). Aborting simulation.')
                 degree_distribution = sim.getNodeStatistics()
                 for degree, count in degree_distribution.items():
                     print(f'NODES OF DEGREE {degree} = {count}')
@@ -1222,6 +1287,7 @@ def run_simulation(sim, visualizer, n_steps, add_unit_every, save_every_batch, p
         sim.save_state_simulation()
     elif save_what == 'trajectory':
         sim.save_state_trajectory()
+    return
 
 
 def get_sim_params_from_dipid(r, h, alpha_sticky_deg, printout=True):
@@ -1279,9 +1345,10 @@ if __name__ == '__main__':
     PLOT_OUTER_LAYER = True
     DT = 0.2
     METHOD = 'langevin'
-    KM = 0.1
+    KM = 0.2 
     DAMPING_COEFFICIENT = np.sqrt(4*MASS*KM)
-    EQUILIBRIUM_THRESHOLD = 1e-7 #
+    EQUILIBRIUM_THRESHOLD = 1e-7 #1e-7 #
+    EQUILIBRIUM_THRESHOLD_ABSOLUTE = 1e-15
     
     # VARIABLE SIMULATION PARAMETERS
     random_placement = False #args.random_placement
@@ -1337,7 +1404,7 @@ if __name__ == '__main__':
     plot_every_batch = args.plot_every_batch
 
     try:
-        run_simulation(sim, visualizer, n_steps, add_unit_every, save_every_batch, plot_every_batch, 'simulation',equilibrium_threshold=EQUILIBRIUM_THRESHOLD)
+        run_simulation(sim, visualizer, n_steps, add_unit_every, save_every_batch, plot_every_batch, 'simulation',equilibrium_threshold=EQUILIBRIUM_THRESHOLD, equilibrium_threshold_absolute = EQUILIBRIUM_THRESHOLD_ABSOLUTE)
     except Exception as e:
         print(f"An error occurred: {e}")
         traceback.print_exc()
