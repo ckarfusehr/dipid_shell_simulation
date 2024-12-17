@@ -219,7 +219,9 @@ class MolecularDynamicsSimulation:
     # Initializations
     def __init__(self, dt, mass, lengthEq, delta, km, interlayer_distance=None, T_C=20, origin=np.zeros(3), method='langevin', damping_coeff=1, random_placement = False, random_chance = 0, monomer_info=None, batch_mode=False,alpha_deg=None,add_unit_every=None):
         #Filename generation
-        str_datetime = datetime.now().strftime("%Y%m%d%H%M%S")
+        #str_datetime = datetime.now().strftime("%Y%m%d%H%M%S") + f"{now.microsecond // 1000:03d}{now.microsecond % 1000:03d}"
+        
+        str_datetime = datetime.now().strftime("%Y%m%d%H%M%S%f")
         filename = './simulations/' + str_datetime + '_sim_' + method + "_dt" + str(dt) + "_a" + str(alpha_deg) + "_delta" + str(delta) + "_km" + str(km)+'_TC' + str(T_C) + "_Bsize" + str(add_unit_every)
         if method == 'langevin':
             filename += "_damping" + str(damping_coeff)
@@ -1231,20 +1233,6 @@ def run_simulation(sim, visualizer, n_steps, add_unit_every, save_every_batch, p
                             neighbor_indices,
                             equil_window_size)
 
-            # # Compute energy per node
-            # energy_new = sim.calcTotalEnergy()
-
-            # drift = abs(energy_new - energy_old)
-            # if drift <= equilibrium_threshold * abs(energy_old):
-            #     equilibrated = True
-            #     #energy_per_node_new = sim.calcTotalEnergy() / sim.getParticleCount()
-            #     print(f"pass after n_rounds: {n_rounds}\n with energy: {energy_new}, drif: {drift}")# energypn: {energy_per_node_new}")
-            #     n_rounds = 0
-            # else:
-            #     n_rounds += 1
-            #     energy_old = energy_new
-            #     print(f"NOT pass after n_rounds: {n_rounds}\n with energy: {energy_new}, drif: {drift}")
-
             # Compute energy per node
             energy_per_node_new = sim.calcTotalEnergy() / sim.getParticleCount()
 
@@ -1252,9 +1240,9 @@ def run_simulation(sim, visualizer, n_steps, add_unit_every, save_every_batch, p
             if drift <= equilibrium_threshold * abs(energy_per_node_old) or drift < equilibrium_threshold_absolute:
                 equilibrated = True
                 #print(f"pass after n_rounds: {n_rounds}\n with energy: {energy_per_node_new}, drif: {drift}")
-                n_rounds = 0
+                #n_rounds = 0
             else:
-                n_rounds += 1
+                #n_rounds += 1
                 energy_per_node_old = energy_per_node_new
                 #print(f"NOT pass after n_rounds: {n_rounds}\n with energy: {energy_per_node_new}, drif: {drift}")
 
@@ -1343,15 +1331,15 @@ if __name__ == '__main__':
     MASS = 1
     T_C = 20
     PLOT_OUTER_LAYER = True
-    DT = 0.2
+    DT = 0.05
     METHOD = 'langevin'
-    KM = 0.2 
+    KM = 0.1 
     DAMPING_COEFFICIENT = np.sqrt(4*MASS*KM)
     EQUILIBRIUM_THRESHOLD = 1e-7 #1e-7 #
     EQUILIBRIUM_THRESHOLD_ABSOLUTE = 1e-15
     
     # VARIABLE SIMULATION PARAMETERS
-    random_placement = False #args.random_placement
+    random_placement = args.random_placement
     random_chance = args.random_chance
 
     # DIPID PARAMETERS
