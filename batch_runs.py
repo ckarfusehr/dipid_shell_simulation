@@ -6,7 +6,7 @@ import yaml
 def run_simulation_subprocess(alpha_sticky_deg_value, n_steps, save_every_batch, plot_every_batch, random_placement, random_chance, add_unit_every, batch_mode=True):
     # Build the command to run your simulation script with arguments
     command = [
-        'python', 'simulation_assembly_langevin_update.py',  # Replace with your actual script name,
+        'python', 'simulation_assembly.py',  # Replace with your actual script name,
         '--alpha_sticky_deg', str(alpha_sticky_deg_value),
         '--n_steps', str(n_steps),
         '--save_every_batch', str(save_every_batch),
