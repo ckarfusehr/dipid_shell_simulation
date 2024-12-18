@@ -1391,11 +1391,12 @@ if __name__ == '__main__':
     save_every_batch = args.save_every_batch
     plot_every_batch = args.plot_every_batch
 
-    try:
-        run_simulation(sim, visualizer, n_steps, add_unit_every, save_every_batch, plot_every_batch, 'simulation',equilibrium_threshold=EQUILIBRIUM_THRESHOLD, equilibrium_threshold_absolute = EQUILIBRIUM_THRESHOLD_ABSOLUTE)
-    except Exception as e:
-        print(f"An error occurred: {e}")
-        traceback.print_exc()
+    run_simulation(sim, visualizer, n_steps, add_unit_every, save_every_batch, plot_every_batch, 'simulation',equilibrium_threshold=EQUILIBRIUM_THRESHOLD, equilibrium_threshold_absolute = EQUILIBRIUM_THRESHOLD_ABSOLUTE)
+    # try:
+    #     run_simulation(sim, visualizer, n_steps, add_unit_every, save_every_batch, plot_every_batch, 'simulation',equilibrium_threshold=EQUILIBRIUM_THRESHOLD, equilibrium_threshold_absolute = EQUILIBRIUM_THRESHOLD_ABSOLUTE)
+    # except Exception as e:
+    #     print(f"An error occurred: {e}")
+    #     traceback.print_exc()
     pass
     
     
@@ -1421,12 +1422,12 @@ if __name__ == '__main__':
 #     pr = cProfile.Profile()
 #     pr.enable()
 
-#     main()  # Replace with your actual main function
+#     main()  #
 
 #     pr.disable()
 #     s = io.StringIO()
 #     sortby = 'cumulative'  # Options: 'time', 'cumulative', etc.
 #     ps = pstats.Stats(pr, stream=s).sort_stats(sortby)
-#     ps.print_stats(20)  # Print top 10 functions
+#     ps.print_stats(20)  # Print top 20 functions
 
 #     print(s.getvalue())
