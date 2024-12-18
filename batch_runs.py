@@ -80,7 +80,7 @@ if __name__ == "__main__":
                             break
                     else:
                         # No processes have finished yet; wait a bit before checking again
-                        time.sleep(1)
+                        time.sleep(10)
 
     # Wait for any remaining processes to finish
     for p in processes:
