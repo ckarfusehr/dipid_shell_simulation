@@ -3,3 +3,9 @@ container_seq_unique_8T_alpha_values.csv
 container_seq_unique_8T_alpha_values.xlsx
 trashpad.ipynb
 *.pyc
+.codegpt
+collect_sims.sh
+*.pdf
+*.png
+*.jpg
+*.csv
