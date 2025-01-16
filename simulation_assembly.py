@@ -1404,7 +1404,7 @@ if __name__ == '__main__':
         save_every = args.save_every
         plot_every = args.plot_every
         
-        filename = './Simulation/simulations/test_case_1.pkl'
+        filename = Path("Simulation/simulations/test_case_1.pkl")
         newsim = MolecularDynamicsSimulation.load_state(filename, 'cont1', start_at=-40)
         visualizer = SimulationVisualizer(newsim, plot_outer_layer=PLOT_OUTER_LAYER)
         run_simulation(newsim, visualizer, n_steps, add_unit_every, save_every, plot_every, 'simulation')
