@@ -464,9 +464,9 @@ class Ellipsoid:
 
 if __name__ == '__main__':
     # Parameters
-    input_folder = Path("simulations")
-    output_folder = Path("sim_images")
-    output_file = "extracted_sim_data.csv"
+    input_folder = Path.cwd() / "simulations"
+    output_folder = Path.cwd() / "sim_images"
+    output_file = Path.cwd() / "extracted_sim_data.csv"
     max_degree_for_ellipsoid = 12  # Explicitly track degrees 1..12
     PLOT = True  # Set to True if you want to plot each simulation's ellipsoid
 
@@ -478,7 +478,7 @@ if __name__ == '__main__':
     # Collect data in a list
     data_records = []
 
-    file_list = list(input_folder.glob("*.pkl"))
+    file_list = list(input_folder.resolve().glob("*.pkl"))
     for filepath in tqdm(file_list, desc="Processing files"):
         try:
             filename_str = filepath.name

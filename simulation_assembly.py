@@ -222,13 +222,13 @@ class MolecularDynamicsSimulation:
         #str_datetime = datetime.now().strftime("%Y%m%d%H%M%S") + f"{now.microsecond // 1000:03d}{now.microsecond % 1000:03d}"
         
         str_datetime = datetime.now().strftime("%Y%m%d%H%M%S%f")
-        filename = './simulations/' + str_datetime + '_sim_' + method + "_dt" + str(dt) + "_a" + str(alpha_deg) + "_delta" + str(delta) + "_km" + str(km)+'_TC' + str(T_C) + "_Bsize" + str(add_unit_every)
+        simulations_dir = Path("simulations")
+        filename = simulations_dir / f"{str_datetime}_sim_{method}_dt{dt}_a{alpha_deg}_delta{delta}_km{km}_TC{T_C}_Bsize{add_unit_every}"
         if method == 'langevin':
-            filename += "_damping" + str(damping_coeff)
+            filename = f"{filename}_damping{damping_coeff}"
         if random_placement:
-            filename += "_random" + str(random_chance)
-            
-        filename += '.pkl'
+            filename = f"{filename}_random{random_chance}"
+        filename = f"{filename}.pkl"
         self.filename = filename
 
         #State memory
@@ -915,7 +915,6 @@ class MolecularDynamicsSimulation:
 
     # Load and save
     def save_state_simulation(self):
-        cd = Path(__file__).parent.resolve()
 
         # Prepare the new state
         state = {
@@ -930,11 +929,10 @@ class MolecularDynamicsSimulation:
         self.state_trajectory.append(state)
 
         # Only pickle self
-        with open(cd / self.filename, 'wb') as f:
+        with open(self.filename, 'wb') as f:
             pickle.dump(self, f)
-
+            
     def save_state_trajectory(self):
-        cd = Path(__file__).parent.resolve()
 
         # Prepare the new state
         state = {
@@ -948,15 +946,13 @@ class MolecularDynamicsSimulation:
         }
         self.state_trajectory.append(state)
 
-        filename_trajectory = ''.join(str(self.filename).split('.')[0:-1]) + '_trajectory.pkl'
-
-        # Only pickle self
-        with open(cd / filename_trajectory, 'wb') as f:
+        filename_trajectory = self.filename.with_name(self.filename.stem + "_trajectory.pkl")
+        with open(filename_trajectory, 'wb') as f:
             pickle.dump(self.state_trajectory, f)
 
     @classmethod
     def load_state(cls, filename, filename_append='', start_at=-1):
-        with open(filename, 'rb') as f:
+        with open(Path(filename), 'rb') as f:
             loaded_instance = pickle.load(f)
 
         trajectory = copy.deepcopy(loaded_instance.state_trajectory[start_at])

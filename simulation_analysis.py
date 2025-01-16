@@ -157,13 +157,14 @@ if __name__ == '__main__':
             'simulations/20241126183708_sim_langevin_dt0.01_delta0.2120138165619025_km0.1_TC20_damping0.1.pkl'
         ]
     else:
-        directory = "simulations"
-        FILES = [os.path.join(directory, f) for f in os.listdir(directory)]
+        directory = Path("simulations")
+        FILES = [directory / f for f in directory.iterdir()]
 
     extracted_data = {}
     for i, file in enumerate(FILES):
         cd = Path().resolve()
-        filepath = cd / file
+        filepath = Path(file).resolve()
+
 
         sim_instance = MolecularDynamicsSimulation.load_state(filepath)
         last_state = sim_instance.state_trajectory[-1]
