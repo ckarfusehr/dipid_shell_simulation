@@ -85,3 +85,4 @@ if __name__ == "__main__":
     # Wait for any remaining processes to finish
     for p in processes:
         p.wait()
+#NETWORKX_AUTOMATIC_BACKENDS=cugraph python batch_runs.py --config_file sim.yaml --add_unit_every 20000 --max_concurrent 31

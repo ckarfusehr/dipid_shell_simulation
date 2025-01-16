@@ -9,6 +9,7 @@ from typing import Literal
 from simulation_assembly import MolecularDynamicsSimulation
 from scipy.optimize import least_squares
 import numpy as np
+from tqdm import tqdm
 
 class Ellipsoid:
     def __init__(self, positions, topology, scaling=1):
@@ -463,11 +464,11 @@ class Ellipsoid:
 
 if __name__ == '__main__':
     # Parameters
-    input_folder = Path("test_sims") #simulations")
+    input_folder = Path("simulations")
     output_folder = Path("sim_images")
-    output_file = "extracted_sim_data_trash.csv"
+    output_file = "extracted_sim_data.csv"
     max_degree_for_ellipsoid = 12  # Explicitly track degrees 1..12
-    PLOT = False  # Set to True if you want to plot each simulation's ellipsoid
+    PLOT = True  # Set to True if you want to plot each simulation's ellipsoid
 
     # Regex patterns
     dt_pattern = re.compile(r"_dt([0-9.]+)")
@@ -477,7 +478,8 @@ if __name__ == '__main__':
     # Collect data in a list
     data_records = []
 
-    for filepath in input_folder.glob("*.pkl"):
+    file_list = list(input_folder.glob("*.pkl"))
+    for filepath in tqdm(file_list, desc="Processing files"):
         try:
             filename_str = filepath.name
             
@@ -490,7 +492,7 @@ if __name__ == '__main__':
             bsize_match = bsize_pattern.search(filename_str)
 
             if not (dt_match and a_match and bsize_match):
-                print(f"Skipping file {filename_str}: required parameters not found.")
+                #print(f"Skipping file {filename_str}: required parameters not found.")
                 continue
 
             dt_value = float(dt_match.group(1))
@@ -506,9 +508,9 @@ if __name__ == '__main__':
             # Initialize Ellipsoid and compute
             scaling = sim_instance.monomer_info['scaling']
             ellipsoid = Ellipsoid(positions, topology, scaling=scaling)
-            #ellipsoid.fit_ellipsoid_pca()
+            ellipsoid.fit_ellipsoid_pca()
             #ellipsoid.fit_ellipsoid_scipy()
-            ellipsoid.fit_ellipsoid_pca_custom_diameters()
+            #ellipsoid.fit_ellipsoid_pca_custom_diameters()
             surface_area_triangulation = ellipsoid.calc_surface_area(mode='triangulation')
             surface_area_fit = ellipsoid.calc_surface_area(mode='fit')
             
@@ -547,10 +549,10 @@ if __name__ == '__main__':
 
             ## Filter for valid containers:
             cond_1 = sim_instance.is_closed_surface()
-            cond_2 = (degree_counts["nodes_4"]/degree_counts["nodes_6"]) <= 0.07 # Sometimes the is_closed_surface is not sufficient. But in these cases, the fraction of Nodes of degree 4 is very high.
+            cond_2 = degree_counts["nodes_4"] <= 10 #(degree_counts["nodes_4"]/degree_counts["nodes_6"]) <= 0.07 # Sometimes the is_closed_surface is not sufficient. But in these cases, the fraction of Nodes of degree 4 is very high.
             valid_container = cond_1 and cond_2
             
-            if PLOT and a_value  <= 7 and valid_container:
+            if PLOT and a_value  <= 10 and valid_container:
                 ellipsoid.save_ellipsoid_plots(
                     output_folder=output_folder,
                     filename=filename_str,
@@ -614,7 +616,7 @@ if __name__ == '__main__':
 
                 data_records.append(row)
         except Exception as e:
-            print(f"Skipping {filepath.name} due to exception: {e}")
+            #print(f"Skipping {filepath.name} due to exception: {e}")
             continue
 
 
