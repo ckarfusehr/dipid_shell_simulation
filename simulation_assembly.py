@@ -1400,13 +1400,13 @@ if __name__ == '__main__':
     '''
     try:
         n_steps = 1000000
-        add_unit_every = 250
+        add_unit_every = 20000
         save_every = args.save_every
         plot_every = args.plot_every
         
         filename = Path("Simulation/simulations/test_case_1.pkl")
-        newsim = MolecularDynamicsSimulation.load_state(filename, 'cont1', start_at=-40)
-        visualizer = SimulationVisualizer(newsim, plot_outer_layer=PLOT_OUTER_LAYER)
+        newsim = MolecularDynamicsSimulation.load_state(filename, 'cont1', start_at=-1)
+        #visualizer = SimulationVisualizer(newsim, plot_outer_layer=PLOT_OUTER_LAYER)
         run_simulation(newsim, visualizer, n_steps, add_unit_every, save_every, plot_every, 'simulation')
     except Exception as e:
         print(f"An error occurred: {e}")

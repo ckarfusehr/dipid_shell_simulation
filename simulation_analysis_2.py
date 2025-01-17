@@ -479,7 +479,9 @@ if __name__ == '__main__':
     data_records = []
 
     file_list = list(input_folder.resolve().glob("*.pkl"))
-    for filepath in tqdm(file_list, desc="Processing files"):
+
+    # Initialize the tqdm progress bar
+    for filepath in tqdm(file_list, desc="Processing files", unit="file"):
         try:
             filename_str = filepath.name
             
